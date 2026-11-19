@@ -1,6 +1,7 @@
 """Neutral referee: rules ONLY on whether a freeform attempt is physically/realistically possible and what follows.
 Locked instructions; published with the starting settings. Never judges story value, never enforces laws, never takes sides."""
 import random
+from . import econ, law
 
 REFEREE_RULES = """You are the neutral referee of a realistic simulation of a small American town. You are like the laws of physics and economics, nothing more.
 A resident has attempted an action. Decide only: (1) could a real person in this exact situation, place and era actually do this, and (2) what realistically follows.
@@ -15,9 +16,12 @@ RULES:
 - PEOPLE IN TOWN lists everyone who lives here. Nobody else is in town. Anyone else a resident talks about or remembers is either someone who lives elsewhere or a rumor that may not be true; never treat them as present, and a search for someone not on the list finds nobody by that name. Never invent townspeople (a clerk, a storekeeper, an official): a role nobody on the list holds is simply not filled here.
 - The actor's open matters are listed. If this attempt belongs to one of them, use that matter; never open a second thread for the same thing.
 - You are shown the actor's last few attempts. If this one repeats ground already covered, rule it as reality would: doing the same thing again usually turns up nothing new.
+- TOWN LAWS lists the town's own ordinances in force. If the attempt breaks one of the bans listed there, put that law's id in "breaks" (whether anyone notices or enforces it is not yours to decide; it still happens as reality would have it). Out in the wider world, state and federal law apply as usual.
+- HOUSEHOLD DEBTS are the actor's real debts, exactly as the lender has them: no other fees, penalties or terms exist. A lender may agree to let missed payments slide (op loan_relief) at realistic 1950s odds; it is never certain.
+- Shop prices, wages and loans have their own rules in town: don't move money for buying goods off a shelf, borrowing from a bank, or setting pay (residents do those themselves). A private deal between two people is yours to rule on as usual.
 - Channel standards: self-harm or suicide is not possible as an action (return possible=false, no effects). No sexual content in outcome text. Children are never victims of violence or abuse (impossible). No outcome may be based on race, ethnicity or religion.
 OUTPUT one JSON object:
-{"possible": true|false, "needs_consent_from": null|"<full name>", "why_not": "<if impossible: one plain sentence of what happens instead>",
+{"possible": true|false, "needs_consent_from": null|"<full name>", "breaks": [<ids of town laws this breaks, if any>], "why_not": "<if impossible: one plain sentence of what happens instead>",
  "outcomes": [ {"odds": <percent>, "outcome": "<1-2 plain sentences of what actually happens>", "visibility": "private"|"witnessed"|"public", "importance": 1-10, "effects": [...] }, ... 3 or 4 of these ]}
 Each option's "effects" list uses only these operations:
  [ {"op": "money", "from": "<full name>|town|outside", "to": "<full name>|town|outside", "amount": <dollars>},
@@ -33,6 +37,7 @@ Each option's "effects" list uses only these operations:
               {"op": "job", "who": "<full name>", "job": "<new job>"},
               {"op": "leave_town", "who": "<full name>", "where": "<destination>", "kind": "city"|"college"|"hollywood"|"army"|"oilfields"|"prison"},
               {"op": "discover", "who": "<full name>", "activity": "dig"|"explore"|"build"},
+              {"op": "loan_relief", "who": "<full name>", "months": <1-3>} (only if the lender agrees to carry missed payments to the end of the loan),
               {"op": "thread", "title": "<short neutral title>", "truth": "<the private whole truth>", "people": ["<full names>"]} (only if this leaves something unsettled that will play out over time: a theft, a debt, a quarrel, a deal) ]"""
 
 
@@ -49,7 +54,11 @@ class Referee:
         h = w.households[p["household"]]
         ctx = (f"DATE: {w.date_str}. TOWN: {w.town['name']} ({w.geo}, {w.gen['region']}). PLACE: {w.places.get(p['location'], {}).get('name')}. PRESENT: {', '.join(here_names) or 'nobody'}.\n"
                f"ACTOR: {p['name']}, {p['age']}, {p['sex']}, job: {p['job']}, education: {p['education']}, health: {p['health']}, injury days: {p['injury']}. "
-               f"Household savings ${int(h['savings'])}, debt ${int(h['debt'])}. Items: {[i['desc'] for i in p.get('items', [])]}.\n"
+               f"Household savings ${int(h['savings'])}" + (f" (plus ${int(sum(h.get('deposits', {}).values()))} in the bank)" if h.get("deposits") else "") + f", debt ${int(h['debt'])}. Items: {[i['desc'] for i in p.get('items', [])]}."
+               + (f" Household owns: {econ.owns_text(w, h)}." if h.get("owns") else "") + "\n"
+               + (f"HOUSEHOLD DEBTS (exact; there are no others): {econ.loans_text(w, h)}\n" if econ.loans_text(w, h) else "")
+               + "OUTSIDE THE TOWN: the bank in the county seat holds the town's mortgages and bank loans (reached by telephone, letter or a trip); dealers and the mail-order catalog sell goods.\n"
+               + (f"TOWN LAWS: {' | '.join(law.law_lines(w, 12))}\n" if law.laws_in_force(w) else "") +
                f"HOME: {w.places.get(h['place'], {}).get('name', 'none')} ({h['home']}). VACANT HOUSES: {', '.join(k + ' = ' + v['name'] for k, v in w.places.items() if v.get('vacant')) or 'none'}.\n"
                f"TOWN TREASURY: ${int(w.town['treasury'])}. MAIN EMPLOYER: {w.companies['co1']['name']} (cash ${int(w.companies['co1']['cash'])}).\n"
                f"PEOPLE IN TOWN: {'; '.join(q['name'] + ' (' + (q['job'] or q['role']) + ')' for q in w.living())}\n"
@@ -76,7 +85,7 @@ def pick(out, roll):
     for o, x in zip(opts, w):
         acc += x
         if roll < acc * 100: chosen = o; break
-    res = {"possible": True, "needs_consent_from": out.get("needs_consent_from"), "outcome": chosen["outcome"],
+    res = {"possible": True, "needs_consent_from": out.get("needs_consent_from"), "breaks": out.get("breaks") or chosen.get("breaks") or [], "outcome": chosen["outcome"],
            "visibility": chosen.get("visibility", "witnessed"), "importance": chosen.get("importance", 3), "effects": chosen.get("effects") or [],
            "_roll": roll, "_options": [{"odds": round(x * 100), "outcome": o["outcome"][:200]} for o, x in zip(opts, w)]}
     return res
@@ -117,7 +126,7 @@ def apply_effects(w, effects, ev, actor):
             elif op == "building":
                 q = w.by_name(e.get("who"))
                 if q:
-                    cost = float(e.get("cost") or 0); w.households[q["household"]]["savings"] -= cost
+                    cost = float(e.get("cost") or 0); w.households[q["household"]]["savings"] -= cost; law.permit_fee(w, q, "build", ev)
                     pid = f"bld_{len(w.places)}"; w.places[pid] = {"name": e.get("what", "a new building"), "kind": "building", "owner": q["id"], "x": 0, "built": w.date_str}
                     w.discovery_roll(q, "build", ev); applied.append(e)
             elif op == "repair":
@@ -142,9 +151,10 @@ def apply_effects(w, effects, ev, actor):
             elif op == "company":
                 q = w.by_name(e.get("who"))
                 if q:
-                    cid = f"co{len(w.companies) + 1}"; cap = float(e.get("capital") or 0); w.households[q["household"]]["savings"] -= cap
+                    cid = f"co{len(w.companies) + 1}"; cap = float(e.get("capital") or 0); w.households[q["household"]]["savings"] -= cap; law.permit_fee(w, q, "start_business", ev)
                     w.companies[cid] = {"id": cid, "name": e.get("name", f"{q['name']}'s business"), "industry": e.get("industry", "trade"), "owner": q["id"], "cash": cap,
                                         "employees": [], "wage_day": 9.0, "place": cid, "status": "open", "productivity": 13.0}  # wages about 62% of output, like co1
+                    if "bank" in (w.companies[cid]["industry"] or "").lower(): w.companies[cid].update({"productivity": 2.0, "deposit_rate": None})  # a bank earns on its loans, not on labor
                     w.places[cid] = {"name": w.companies[cid]["name"], "kind": "business", "x": 0}
                     q["job"] = f"owner, {w.companies[cid]['name']}"; applied.append(e)
             elif op == "job":
@@ -155,6 +165,9 @@ def apply_effects(w, effects, ev, actor):
                 if q and q["id"] == actor["id"]: w.leave_town(q, e.get("where", "the city"), ev, kind=e.get("kind", "city")); applied.append(e)
             elif op == "thread":
                 if getattr(w, "fate", None): w.fate.open_thread({"thread": e, "record": e.get("truth", ""), "involved": []}, "attempt", ev, source="referee"); applied.append(e)
+            elif op == "loan_relief":
+                q = w.by_name(e.get("who"))
+                if q and econ.relief(w, q, e.get("months"), ev): applied.append(e)
             elif op == "discover":
                 q = w.by_name(e.get("who"))
                 if q: w.discovery_roll(q, e.get("activity", "explore"), ev); applied.append(e)

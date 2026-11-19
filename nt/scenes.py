@@ -18,6 +18,9 @@ def house_state(snap, hid, seed):
     r = random.Random(seed * 17 + int(hid)); has_car = r.random() < min(0.9, 0.35 + max(0, h.get("savings", 0)) / 2000)
     car_col = r.choice(CARS) if has_car else None; year = int(snap["date"][:4])
     age = r.choice([0, 1, 2, 3, 4, 5, 6, 8, 10, 13]) if h.get("savings", 0) > 1500 else r.choice([3, 5, 6, 8, 10, 12, 14, 16])  # richer families drive newer cars
+    if "car_year" in h:  # since Nov 18 the town tracks real cars: the family's own car, or none
+        has_car = bool(h["car_year"]); car_col = car_col or (r.choice(CARS) if has_car else None); car_col = car_col if has_car else None
+        age = year - (h["car_year"] or year)
     return {"cond": h.get("condition", 1.0), "burned": bool(pl.get("burned")) or bool(h.get("homeless")), "tv": bool(h.get("has_tv")) and not h.get("homeless"),
             "car": car_col, "year": year, "car_year": year - age}
 

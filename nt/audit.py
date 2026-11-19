@@ -107,6 +107,7 @@ def main(run, lo=0, hi=10 ** 9):
     if quiet: print("  never in a conversation: " + ", ".join(quiet))
     real_life(ev, sn, days)
     threads(ev)
+    economy(ev, sn)
     big = [e for e in ev if e["importance"] >= 7 and e["kind"] not in ("conversation", "attempt", "outcome", "household_broke", "company_broke")]
     print(f"\nBIG EVENTS ({len(big)}):"); [print(f"  {e['date']} {e['kind']}: {e['text'][:120]}") for e in big[:15]]
 
@@ -143,6 +144,25 @@ def threads(ev):
     how = collections.Counter(e["data"].get("ending") for e in ended.values())
     print(f"\nTHREADS: {len(opened)} opened, {len(ended)} ended (" + ", ".join(f"{k} {v}" for k, v in how.most_common()) + f"), {len(still)} still open")
     for t in still[:8]: print(f"  open since {opened[t]['date']}: {opened[t]['text'][:110]}")
+
+
+ECON_KINDS = ("purchase", "loan", "loan_relief", "loan_refused", "loan_application", "loan_paid", "payment_missed", "repossessed", "collection", "business_seized", "bank_failed",
+              "price_change", "wage_change", "shop_choice", "hired", "fired", "quit", "job_application", "law_enacted", "fined", "breach", "permit", "town_short", "lost_home")
+
+
+def economy(ev, sn):
+    """Did anyone decide anything with money (the Nov 18 autonomy build)? Counts, then every decision in order."""
+    xs = [e for e in ev if e["kind"] in ECON_KINDS]
+    c = collections.Counter(e["kind"] for e in xs)
+    print(f"\nECONOMY: " + (", ".join(f"{k} {v}" for k, v in c.most_common()) or "no money decisions at all"))
+    biz = [e for e in ev if e["kind"] in ("attempt",) and "start business" in e["text"].lower()]
+    if biz: print(f"  businesses attempted: {len(biz)}")
+    for e in xs:
+        if e["kind"] not in ("payment_missed",): print(f"  {e['date']} {e['kind']}: {e['text'][:130]}")
+    t = sn[-1].get("town", {})
+    if "store_level" in t: print(f"  at the end: store prices {round((t['store_level'] - 1) * 100):+d}% vs county seat; a diner meal ${t.get('meal')}; laws in force {len(t.get('laws', []))}")
+    hh = sn[-1]["households"]; cs = sum(1 for h in hh.values() if h.get("groceries_at") == "county seat")
+    if hh: print(f"  {cs} of {len(hh)} households buy groceries in the county seat; {sum(1 for h in hh.values() if h.get('deposits'))} keep money in a bank")
 
 
 if __name__ == "__main__":

@@ -4,11 +4,12 @@ import json, os, time, threading, urllib.request, urllib.error
 
 KEY_PATH = os.path.expanduser("~/.secrets/anthropic_key")
 API = "https://api.anthropic.com/v1/messages"
-NO_THINK = {"resident", "talk", "referee", "referee_big", "world", "world_big"}
+NO_THINK = {"resident", "talk", "referee", "referee_big", "world", "world_big", "law"}
 THINK_OFF = {}  # model -> the thinking type that turns thinking off (learned from the API)
 MODELS = {"resident": "claude-haiku-5-5", "talk": "claude-sonnet-5-5",  # conversations: Sonnet (chosen Nov 17 after the Haiku vs Sonnet A/B test)
            "referee": "claude-haiku-5-5", "referee_big": "claude-sonnet-5-5",
            "world": "claude-haiku-5-5", "world_big": "claude-sonnet-5-5",  # the world step and threads (Nov 18)
+           "law": "claude-sonnet-5-5",  # the town clerk who writes down what a passed measure binds (Nov 18; rare, so the better model)
            "editor": "claude-sonnet-5-5"}
 # $ per million tokens (checked Nov 17, 2026 on platform.claude.com/docs/en/about-claude/pricing)
 PRICES = {"claude-haiku-5-5": {"in": 0.10, "out": 0.50, "cache_write": 0.125, "cache_read": 0.01},

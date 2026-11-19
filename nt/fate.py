@@ -10,6 +10,7 @@ resolved, given up, gone cold, or gone (everyone involved dead or away). Nothing
 The model never decides a resident's choices; residents act on threads themselves, and what they did is shown to the step.
 """
 import json, random
+from . import law as L, econ
 
 # (category, unit, yearly rate per unit, season weights or None, source)
 # unit: person = each resident in town; household = each household; town = the town as a whole; secret = each unrevealed secret
@@ -103,7 +104,7 @@ class Fate:
         for p in w.living():
             h = w.households[p["household"]]
             out.append(f"{p['name']} ({p['age']}, {p['sex']}, {p['role']}, {p['job'] or 'no job'}; household {h['surname']}"
-                       + (f"; quirks {', '.join(p['quirks'])}" if p["age"] >= 14 else "") + f"; money {'none' if h['savings'] <= 0 else 'tight' if h['savings'] < 150 else 'comfortable' if h['savings'] < 3000 else 'well off'})")
+                       + (f"; quirks {', '.join(p['quirks'])}" if p["age"] >= 14 else "") + f"; money {'none' if econ.cash(h) <= 0 else 'tight' if econ.cash(h) < 150 else 'comfortable' if econ.cash(h) < 3000 else 'well off'})")
         return "\n".join(out)
 
     @property
@@ -115,6 +116,7 @@ class Fate:
         places = [f"- {pl['name']} ({pl.get('hours', '')}, until {pl.get('until_date', '')})" for pl in w.places.values() if pl.get("kind") == "event"]
         return (f"DATE: {w.date.strftime('%A, %B %d, %Y')} ({w.season}). TOWN: {w.town['name']}, {w.gen['region']} ({w.geo}); population {len(w.living())}. "
                 f"Main employer: {w.companies['co1']['name']}. The law in town: {', '.join(law) or 'the county sheriff, from the county seat'}.\n"
+                + (f"TOWN LAWS: {' | '.join(L.law_lines(w, 12))}\n" if L.laws_in_force(w) else "") +
                 f"RESIDENTS:\n{self.people_list()}\n" + ("OPEN MATTERS IN TOWN:\n" + "\n".join(open_t) + "\n" if open_t else "")
                 + ("GOING ON IN TOWN:\n" + "\n".join(places) + "\n" if places else ""))
 

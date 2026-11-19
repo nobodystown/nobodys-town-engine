@@ -4,6 +4,7 @@ No suggestions, no meta-talk, no exact numbers they wouldn't be thinking about, 
 rates how much their own memories matter."""
 import datetime as dt, json, math, random, re
 from .world import plural
+from . import econ, law
 
 # ======================================================================================================
 # The resident prompt is built from labeled BLOCKS. Each block is one function, documented, and part of the
@@ -25,12 +26,21 @@ PLAN_FORMAT = """Live your day as yourself. Return JSON:
  "feelings": {"<person's full name>": <-20..20>}  (optional: only if something changed how you feel about someone),
  "rate": {"<number of a NEW memory above>": <1-10, how much it matters to you>},
  "slots": [ {"slot": "morning"|"midday"|"evening"|"night", "place": "<place id>", "do": "<action>", "target": "<full name, measure id, or null>", "amount": <dollars or null>, "detail": "<what exactly, in your own words>"} x4 ]}
-Actions the town understands (alphabetical): apply_job, ask_loan, attempt, build, chores, court, declare_candidacy, dig, eat_at_diner, end_relationship, explore, farm, fire, fish, give, hire, home, lend, leave_town, pay, phone, propose_marriage, propose_measure, quit_job, repair, school, sell, shop, side_work, sleep, start_business, talk, visit, vote, work, write_letter.
+Actions the town understands (alphabetical): apply_job, approve_loan, ask_loan, attempt, bank_loan, build, buy, chores, court, declare_candidacy, deny_loan, deposit, dig, eat_at_diner, end_relationship, enforce, explore, farm, fire, fish, give, hire, home, lend, leave_town, pay, phone, propose_marriage, propose_measure, quit_job, repair, school, sell, set_price, set_wage, shop, shop_at, side_work, sleep, start_business, talk, visit, vote, withdraw, work, write_letter.
 - talk, phone, court, ask_loan, propose_marriage, end_relationship: target = a person.
 - vote: target = a candidate's full name or a measure id; detail = "yes" or "no" for a measure.
 - chores: everyday work around the house, yard, farm or errands; say what in detail.
 - repair: fix up your home; amount = dollars you put into it (or null for all of it); say what.
 - side_work: odd jobs or extra hours for pay; say what. sell: say what and to whom.
+- buy: say what (add "on time" to pay in installments); amount = the most you'll pay, or null.
+- shop_at: where your household buys its groceries from now on ("the general store" or "the county seat").
+- bank_loan: amount = dollars, detail = what it's for; target = a bank in town or its owner, or null for the bank in the county seat.
+- deposit / withdraw: amount = dollars (target = which bank, or null).
+- apply_job / hire: target = the person who does the hiring / the person you hire; amount = weekly pay offered, or null.
+- set_price (if you run the store or the diner): store: amount = percent above (+) or below (-) county-seat prices; diner: amount = cents for a meal.
+- set_wage (if people work for you): amount = dollars a week; target = one worker, or null for everyone.
+- approve_loan / deny_loan (if you own a bank): target = the applicant; amount; detail = the rate and months.
+- enforce (if you're the town's lawman): target = the person; detail = which town law.
 - attempt: anything not listed; describe exactly what you do."""
 
 SAY_FORMAT = """Return JSON: {"say": "<exactly what you say out loud, the way you'd really say it>", "aside": "<private thought, optional>", "end": true|false, "deal": null | {"type": "pay"|"lend"|"promise"|"agree"|"refuse", "amount": <number or null>, "terms": "<short>"}}
@@ -108,9 +118,11 @@ def identity_block(w, p):
     h = w.households[p["household"]]
     fam = [f"{w.people[i]['name']} ({w.people[i]['role']}, {w.people[i]['age']})" for i in h["members"] if i != p["id"] and w.people[i]["alive"]]
     return "\n".join([f"{p['name']}, {p['sex']}, age {p['age']} (born {p['born']}). At home: {p['role']}.",
-                      f"Job: {p['job'] or 'none'}. Schooling: {p['education']}. Health: {p['health']}." + (" Served in the war." if p["veteran"] else ""),
+                      f"Job: {p['job'] or 'none'}" + (f" (about ${ww:.0f} a week)" if (ww := econ.wage_week(w, p)) else "") + f". Schooling: {p['education']}. Health: {p['health']}." + (" Served in the war." if p["veteran"] else ""),
+                      *([f"What you want most out of life: {p['goal']}."] if p.get("goal") else []),
                       f"Temperament: {trait_words(p['traits'])}. Quirks: {', '.join(p['quirks'])}.",
-                      f"Household: the {plural(h['surname'])}. Lives with: {', '.join(fam) or 'nobody'}. Home: {h['home'] if h['home'] != 'none' else 'none right now'}.",
+                      f"Household: the {plural(h['surname'])}. Lives with: {', '.join(fam) or 'nobody'}. Home: {h['home'] if h['home'] != 'none' else 'none right now'}."
+                      + (f" At home you have {econ.owns_text(w, h)}." if h.get("owns") else ""),
                       f"Town: {w.town['name']}, {w.gen['region']}. The main employer is {w.companies['co1']['name']}."])
 
 
@@ -204,7 +216,15 @@ def today_block(w, p):
         opens = [m for m in t["motions"] if m["status"] == "open"]
         notes.append(f"Tonight is the council meeting at the town hall; you sit on it as {'mayor' if p['id'] == off['mayor'] else 'a council member'}."
                      + ("".join(f" On the agenda: {m['id']}, \"{m['text']}\" (proposed by {w.name(m['by'])})." for m in opens) if opens else ""))
-    for l in t["laws"][-3:]: notes.append(f"Town rule: {l['text']}")
+    tl = law.law_lines(w, 8)
+    if tl: notes.append("Town laws in force: " + " | ".join(tl) + ".")
+    if p["location"] == "store" and econ.shop_runners(w, "store"):
+        lv = w.shops["store"]["level"]; pc = round((lv - 1) * 100)
+        notes.append("Prices here are about the same as in the county seat." if pc == 0 else f"Prices here run about {abs(pc)}% {'above' if pc > 0 else 'below'} the county seat's.")
+    if p["location"] == "diner": notes.append(f"A meal here costs {int(round(w.shops['diner']['meal'] * history_P(w) * 100))} cents.")
+    oh = w.places.get(p["location"], {}).get("household")
+    if oh and oh != p["household"] and oh in w.households and w.households[oh].get("owns"):
+        notes.append(f"The {plural(w.households[oh]['surname'])} have {econ.owns_text(w, w.households[oh])}.")
     mine = [x for x in getattr(w, "threads", []) if x["status"] == "open" and p["id"] in x["people"]]
     if mine: notes.append("Unsettled in your life: " + "; ".join(f"{x['title']} (since {x['opened']})" for x in mine[-4:]) + ".")
     on = [v for v in w.places.values() if v.get("kind") == "event"]
@@ -212,6 +232,11 @@ def today_block(w, p):
     return "\n".join(x for x in [f"It is {w.date.strftime('%A, %B %d, %Y')}, {SLOTS[w.slot]}. {weather_words(w.weather.get('today', {}))}".strip(),
                                   f"You are at {w.places.get(p['location'], {}).get('name', p['location'])}." + (f" With you: {', '.join(here)}." if here else ""),
                                   " ".join(x for x in (MOOD_WORDS.get(p.get("mood_today")), body_words(p)) if x), " ".join(notes)] if x)
+
+
+def history_P(w):
+    from . import history
+    return history.price_index(w.date.year)
 
 
 def places_block(w): return "Places (id = name): " + "; ".join(f"{k} = {v['name']}" for k, v in w.places.items())
@@ -289,6 +314,23 @@ class MockMind:
             elif roll < 0.45: a = {"do": "attempt", "place": "town_hall", "detail": "[MOCK] tries to get a streetlight put in"}
             else: a = {"do": "home", "place": w.households[p["household"]]["place"]}
             a.update({"slot": s, "amount": None}); a.setdefault("target", None); a.setdefault("detail", "[MOCK]"); slots.append(a)
+        h = w.households[p["household"]]; roll2 = r.random(); home = h["place"]
+        if p["age"] >= 21:
+            if roll2 < 0.004: slots[1] = {"slot": "midday", "place": "store", "do": "buy", "target": None, "amount": None, "detail": r.choice(["a television set", "a used car on time", "a washing machine on time", "a radio", "a new car on time", "the house we rent"])}
+            elif roll2 < 0.006: slots[1] = {"slot": "midday", "place": home, "do": "bank_loan", "target": None, "amount": r.choice([100, 300, 1500]), "detail": r.choice(["to fix the roof", "to start a business", "to pay doctor bills"])}
+            elif roll2 < 0.016: slots[1] = {"slot": "midday", "place": home, "do": "deposit", "target": None, "amount": None, "detail": "[MOCK]"}
+            elif roll2 < 0.018: slots[1] = {"slot": "midday", "place": home, "do": "shop_at", "target": None, "amount": None, "detail": r.choice(["the county seat", "the general store"])}
+            elif roll2 < 0.021: slots[1] = {"slot": "midday", "place": "town_hall", "do": "propose_measure", "target": None, "amount": None, "detail": r.choice(["Raise the town tax to $8 a quarter", "Ban fishing off the public dock, fine $5", "Spend $50 to fix the town hall roof"])}
+        k = econ.shop_of(w, p)
+        if k and roll2 > 0.97: slots[1] = {"slot": "midday", "place": k, "do": "set_price", "target": None, "amount": r.choice([-5, 5, 10, 15]) if k == "store" else r.choice([55, 65, 75]), "detail": "[MOCK]"}
+        co = next((c for c in w.companies.values() if c["owner"] == p["id"]), None)
+        if co and co["employees"] and roll2 > 0.985: slots[1] = {"slot": "midday", "place": "company", "do": "set_wage", "target": None, "amount": r.choice([55, 62, 70]), "detail": "[MOCK]"}
+        if any(x in (p.get("job") or "") for x in ("marshal", "sheriff")) and roll2 < 0.05 and others:
+            slots[2] = {"slot": "evening", "place": "town_hall", "do": "enforce", "target": r.choice(others)["name"], "amount": None, "detail": "[MOCK]"}
+        off = w.town["offices"]
+        if (p["id"] in off["council"] or p["id"] == off["mayor"]) and w.date.weekday() == w.town["charter"].get("meeting_weekday", 1):
+            for m in w.town["motions"]:
+                if m["status"] == "open": slots[2] = {"slot": "evening", "place": "town_hall", "do": "vote", "target": m["id"], "amount": None, "detail": "yes" if r.random() < 0.6 else "no"}
         evs = [k for k, v in w.places.items() if v.get("kind") == "event"]
         if evs and r.random() < 0.3: slots[2] = {"slot": "evening", "place": r.choice(evs), "do": "home", "target": None, "amount": None, "detail": "[MOCK] goes to the event"}
         for e in w.town["elections"]:

@@ -1,6 +1,6 @@
 """World state + automated systems (physics). No storytelling here: only locked rules and dice."""
 import datetime as dt, json, math, random
-from . import history
+from . import history, econ
 
 SLOTS = ["morning", "midday", "evening", "night"]
 SEASON_OF_MONTH = {12: "winter", 1: "winter", 2: "winter", 3: "spring", 4: "spring", 5: "spring", 6: "summer", 7: "summer", 8: "summer", 9: "autumn", 10: "autumn", 11: "autumn"}
@@ -79,7 +79,6 @@ def job_pay(job):
         if k in j: return v
     return DEFAULT_PAY
 
-
 ING = {"dig": "digging", "explore": "exploring", "build": "building", "farm": "farming", "fish": "fishing"}
 
 
@@ -98,6 +97,7 @@ class World:
         self.threads = []  # open and ended matters (see fate.py)
         self.next_pid = 1
         self._build()
+        econ.setup(self)  # possessions, the mortgages and debts families already had, the shops (separate dice)
 
     # ------------------------------------------------------------------ setup
     def _build(self):
@@ -251,13 +251,16 @@ class World:
         ahead and some fall behind. Even a family with nothing coming in still needs fuel, clothes and lights."""
         income = h.pop("earned_m", 0); outgo = h.pop("spent_m", 0) + housing
         adults = [self.people[i] for i in h["members"] if self.people[i]["alive"] and self.people[i]["age"] >= 18]
-        save = 0.09 + sum(SAVE_QUIRK.get(q, 0) for a in adults for q in a["quirks"])
-        save = max(-0.15, min(0.4, save))
+        # the 16% that families spent on cars, appliances and furniture is no longer spent for them: it stays in the household
+        # until they decide to buy something (econ.DURABLES_SHARE; decided with Aaron, Nov 18)
+        save = 0.09 + econ.DURABLES_SHARE + sum(SAVE_QUIRK.get(q, 0) for a in adults for q in a["quirks"])
+        save = max(-0.15, min(0.55, save))
         floor = 0.25 * n * 30 * P  # bare necessities
         other = round(max(floor, income * (1 - save) - outgo), 2)
         h["savings"] -= other
-        if store_h in self.households and store_h != h["id"]:  # a share of it is bought at the general store
-            self.households[store_h]["savings"] += other * 0.1 * 0.22; self.earned(self.households[store_h], other * 0.1 * 0.22)
+        st = self.shops["store"]
+        if h.get("groceries_at", "store") == "store" and store_h in self.households and store_h != h["id"] and econ.shop_runners(self, "store"):  # a share of it is bought at the general store
+            m = other * 0.1 * (1 - econ.WHOLESALE / st["level"]); self.households[store_h]["savings"] += m; self.earned(self.households[store_h], m); st["week"] += m
 
     def unemployment_claim(self, c, laid, firm_size=None):
         """Laid-off or fired hands of a covered firm can draw unemployment pay (not if they quit; firms too small aren't covered)."""
@@ -346,7 +349,7 @@ class World:
                 for i in c["employees"]:
                     p = self.people[i]
                     if not p["alive"]: continue
-                    w = c["wage_day"] * W * 5.5; self.households[p["household"]]["savings"] += w; self.earned(self.households[p["household"]], w); pay += w
+                    w = max(p.get("wage_day") or c["wage_day"] * W, econ.min_wage_day(self, c)) * 5.5; self.households[p["household"]]["savings"] += w; self.earned(self.households[p["household"]], w); pay += w
                 c["cash"] -= pay
                 c["broke_days"] = c.get("broke_days", 0) + 7 if c["cash"] < 0 else 0
                 if c["broke_days"] >= 70 and c["status"] == "open":  # ten weeks in the red: it shuts its doors
@@ -359,24 +362,27 @@ class World:
                 elif c["cash"] > 0: c["warned_broke"] = False
                 # the owner takes home what the business makes beyond a working reserve (about six months of costs and payroll). No ceiling.
                 reserve = 26 * (pay + 6 * (4 + 1.5 * len(c["employees"])) * P)  # about six months of payroll and costs kept back for hard times
+                if "bank" in (c.get("industry") or "").lower(): reserve += sum(hh.get("deposits", {}).get(c["id"], 0) for hh in self.households.values())  # a bank's deposits aren't the owner's
                 if c["status"] == "open" and c["cash"] > reserve and self.people[c["owner"]]["alive"]:
                     draw = round((c["cash"] - reserve) * 0.5, 2); c["cash"] -= draw
                     oh = self.households[self.people[c["owner"]]["household"]]; oh["savings"] += draw; self.earned(oh, draw)
         self.wages_day(ev, W)
+        if weekday == 4: econ.shop_payroll(self, ev)
         # households: food, housing, debt interest; spending flows to the store owner
         store_h = self.places["store"]["household"]
         for h in self.households.values():
             n = sum(1 for i in h["members"] if self.people[i]["alive"] and not self.people[i]["offtown"])
             if n == 0: continue
-            food = 0.75 * n * P
+            food = econ.groceries(self, h, 0.75 * n * P)  # bought where the family chooses, at the price the store sets
             h["savings"] -= food; h["spent_m"] = h.get("spent_m", 0) + food
-            if store_h in self.households and store_h != h["id"]: self.households[store_h]["savings"] += food * 0.22; self.earned(self.households[store_h], food * 0.22)  # store margin
+            if h["savings"] < 0: econ.cover(self, h)  # short of cash: they write a check on their own bank account
             if self.date.day == 1:
                 hc = h["monthly_housing"] * (P if h["home"] == "rented" else 1.0); h["savings"] -= hc  # rents follow prices; a mortgage payment is fixed
                 self.social_security(h)
-                self.living_costs(h, n, P, hc, store_h)
-                if h["debt"] > 0: h["debt"] = int(h["debt"] * 1.005)
-                if h["monthly_housing"] > 0:  # behind on rent or the mortgage: landlords evict after 3 months, the bank forecloses after 6
+                h.setdefault("earn_hist", []).append(round(h.get("earned_m", 0), 2)); h["earn_hist"] = h["earn_hist"][-12:]  # what came in last month (lenders look at this)
+                self.living_costs(h, n, P, hc + econ.payments(self, h, ("mortgage",)), store_h)
+                econ.cover(self, h)
+                if h["monthly_housing"] > 0:  # behind on the rent: the landlord evicts after 3 months (mortgages are loans now: see econ.pay_loans)
                     h["behind"] = h.get("behind", 0) + 1 if h["savings"] < 0 else 0
                     if h["behind"] >= (3 if h["home"] == "rented" else 6): self.lose_home(h, "evicted for unpaid rent" if h["home"] == "rented" else "lost to the bank after missed mortgage payments", ev)
             if h["savings"] < 0 and not h.get("broke_flag"):
@@ -391,13 +397,7 @@ class World:
                 h["savings"] -= self.town["tax_per_household_quarter"]; got += self.town["tax_per_household_quarter"]
             self.town["treasury"] += got
             ev("taxes", text=f"Quarterly taxes collected: ${got} into the town treasury.", importance=2, public=False)
-        # TV adoption (real curve)
-        yr = self.date.year
-        share = history.TV_SHARE.get(min(yr, 1960), 0.9)
-        for h in self.households.values():
-            if not h["has_tv"] and h["savings"] > 250 and self.rng.random() < share / 365 * 1.2:
-                h["has_tv"] = True; h["savings"] -= 180
-                ev("purchase", actors=[i for i in h["members"] if self.people[i]["age"] >= 18][:1], text=f"The {plural(h['surname'])} bought a television set.", importance=4, public=True)
+        # (TV sets, cars and appliances are bought when a family decides to: econ.buy. The old TV dice were removed Nov 18.)
 
     # ------------------------------------------------------------------ health, life and death (daily)
     def life_day(self, ev):
@@ -543,110 +543,7 @@ class World:
         if self.flags.get("highway_program") and self.date.month == 3 and self.rng.random() < 0.3 and self.geo != "island":
             ev("highway", text="State highway engineers write to the town: the new interstate's route through the county is being surveyed.", importance=7, public=True)
 
-    # NOTE (Nov 18): happenings_day and town_events_day are no longer called. Their hand-written lists were replaced by the
-    # world step (fate.py): real-rate categories, options written fresh for each town, dice picks. Kept for reference only.
-    def happenings_day(self, ev):
-        """Small random things that happen to households: the everyday dice of life. Rolled, never chosen."""
-        lm = (self.gen.get("landmarks") or ["creek"])[0]
-        water = {"coast": "the harbor", "island": "the point", "lakeside": "the lake", "swamp": "the bayou"}.get(self.geo, "the creek")
-        s = self.season
-        for h in self.households.values():
-            members = [self.people[i] for i in h["members"] if self.people[i]["alive"] and not self.people[i]["offtown"]]
-            if not members or self.rng.random() > 0.1: continue
-            adults = [p for p in members if p["age"] >= 16] or members; kids = [p for p in members if 5 <= p["age"] < 16]
-            who = self.rng.choice(adults); kid = self.rng.choice(kids) if kids else None; sn = h["surname"]; first = who["name"].split()[0]
-            city = self.rng.choice(["Chicago", "Kansas City", "Denver", "Saint Louis", "Detroit", "Los Angeles", "Dallas", "Omaha", "Memphis", "Pittsburgh"])
-            pool = [(f"The {plural(sn)}' dog got loose and ran off toward the {lm}.", [who], False), (f"A letter came for the {plural(sn)} from a cousin in {city.split()[0]}.", adults, False),
-                    (f"The {plural(sn)}' radio quit working.", adults, False), (f"A traveling salesman came to the {plural(sn)}' door selling encyclopedias.", [who], False),
-                    (f"{first}'s truck won't start.", [who], False), (f"A stray cat had kittens under the {plural(sn)}' porch.", members, False),
-                    (f"The {plural(sn)} got a long-distance telephone call.", adults, False), (f"{first} lost a good pocketknife somewhere.", [who], False),
-                    (f"Somebody left a pie on the {plural(sn)}' porch with no note.", adults, False), (f"The {plural(sn)}' hens have stopped laying.", adults, False),
-                    (f"{first} has a toothache that won't quit.", [who], False), (f"The fish are biting at {water}, people say.", [who], True),
-                    (f"The church is getting up a pie supper for Saturday.", [who], True), (f"There's a new picture showing at the theater in the county seat.", [who], True)]
-            if kid: pool += [(f"{kid['name'].split()[0]} came home from school with a note from the teacher.", adults + [kid], False),
-                             (f"{kid['name'].split()[0]} and some other children built a raft and tried it on {water}.", [kid], False),
-                             (f"{kid['name'].split()[0]} found a baby bird and wants to keep it.", members, False)]
-            if s in ("summer", "autumn"): pool += [(f"The {plural(sn)}' garden came in heavy this year.", adults, False), (f"The county fair is coming up, people say.", [who], True)]
-            if s == "winter": pool += [(f"The {plural(sn)}' pipes froze in the night.", adults, False)]
-            if s == "spring": pool += [(f"A cow got into the {plural(sn)}' garden.", adults, False)]
-            pool += [(f"{first} got a letter from an old army buddy.", [who], False) if who.get("veteran") else (f"{first} got a postcard from a friend who moved away.", [who], False),
-                     (f"The {plural(sn)}' porch step finally gave way.", adults, False), (f"A neighbor's goat got loose and ate the {plural(sn)}' wash off the line.", adults, False),
-                     (f"{first} won a raffle ticket drawing at the store: a ham.", [who], True), (f"The {plural(sn)}' chimney is drawing poorly and smoking up the house.", adults, False),
-                     (f"{first} found an old photograph in a drawer.", [who], False), (f"Somebody's been leaving the {plural(sn)}' gate open at night.", adults, False),
-                     (f"{first} has been asked to bring a dish to the church supper.", [who], True), (f"The {plural(sn)}' clock stopped and nobody can get it going.", adults, False),
-                     (f"A Sears catalog came in the mail for the {plural(sn)}.", members, False), (f"{first} twisted an ankle on the back steps.", [who], False),
-                     (f"A hawk got one of the {plural(sn)}' chickens.", adults, False), (f"The {plural(sn)} heard a fiddle playing somewhere down the road last night.", members, False),
-                     (f"{first} has a birthday coming up.", members, False), (f"The {plural(sn)}' cousin wrote to say she might visit.", adults, False),
-                     (f"Somebody's selling a used piano, people say.", [who], True), (f"The traveling photographer is coming through town, people say.", [who], True)]
-            if kid: pool += [(f"{kid['name'].split()[0]} lost a tooth.", members, False), (f"{kid['name'].split()[0]} got into a scrap at school.", adults + [kid], False),
-                             (f"{kid['name'].split()[0]} wants a puppy something awful.", members, False)]
-            seen = self.flags.setdefault("happened", {})  # no family gets the same happening twice, and the town doesn't hear the same thing twice in a week
-            fresh = [x for x in pool if x[0] not in seen.get(h["id"], set()) and not (x[2] and seen.get("public", {}).get(x[0], -99) > self.day - 7)]
-            if not fresh: continue
-            text, actors, public = self.rng.choice(fresh)
-            seen.setdefault(h["id"], set()).add(text)
-            if public: seen.setdefault("public", {})[text] = self.day
-            ev("happening", actors=[p["id"] for p in actors], text=text, importance=3, public=public)
-
-    # Town-level events at realistic yearly odds (converted to daily). Rolled, never chosen; published with the rules.
-    TOWN_EVENTS = [  # (key, yearly odds, season or None)
-        ("contract_won", 0.4, None), ("contract_lost", 0.3, None), ("new_preacher", 0.08, None), ("revival_tent", 0.5, "summer"),
-        ("circus", 0.4, "summer"), ("stranger", 1.2, None), ("break_in", 0.6, None), ("car_wreck", 0.6, None), ("house_fire", 0.35, None),
-        ("barn_fire", 0.3, None), ("inheritance", 0.3, None), ("epidemic", 0.25, "winter"), ("new_doctor", 0.05, None), ("raise", 0.5, None),
-        ("bank_trouble", 0.05, None), ("film_crew", 0.02, None), ("highway_rumor", 0.15, None), ("school_fight", 0.2, None)]
-
-    def town_events_day(self, ev):
-        for key, yearly, season in self.TOWN_EVENTS:
-            if season and self.season != season: continue
-            if self.rng.random() < yearly / (91 if season else 365): self.town_event(key, ev)
-
-    def town_event(self, key, ev):
-        r = self.rng; t = self.town["name"]; c = self.companies.get("co1"); adults = self.adults()
-        hh = [h for h in self.households.values() if any(self.people[i]["alive"] and not self.people[i]["offtown"] for i in h["members"])]
-        if not hh or not adults: return
-        h = r.choice(hh); sn = h["surname"]; members = [i for i in h["members"] if self.people[i]["alive"] and not self.people[i]["offtown"]]
-        p = r.choice(adults)
-        if key == "contract_won" and c and c["status"] == "open":
-            c["productivity"] *= 1.15; c["cash"] += r.randint(800, 4000)
-            ev("town_event", actors=[c["owner"]], text=f"{c['name']} lands a big new contract.", importance=6, public=True, data={"kind": key})
-        elif key == "contract_lost" and c and c["status"] == "open":
-            c["productivity"] *= 0.85
-            ev("town_event", actors=[c["owner"]], text=f"{c['name']} loses its biggest customer.", importance=7, public=True, data={"kind": key, "said": f"{c['name']} lost its biggest customer; people are worried about the jobs."})
-        elif key == "raise" and c and c["status"] == "open":
-            c["wage_day"] = round(c["wage_day"] * 1.06, 2)
-            ev("town_event", actors=c["employees"][:10], text=f"{c['name']} raises wages a little.", importance=5, public=True, data={"kind": key})
-        elif key == "new_preacher": ev("town_event", text=f"A new preacher arrives to take over the church in {t}.", importance=5, public=True, data={"kind": key})
-        elif key == "revival_tent": ev("town_event", text="A traveling revival pitches its tent at the edge of town for the week.", importance=5, public=True, data={"kind": key})
-        elif key == "circus": ev("town_event", text="A small traveling circus sets up in the field outside town for two nights.", importance=5, public=True, data={"kind": key})
-        elif key == "stranger": ev("town_event", text=f"A stranger is passing through {t}, asking around for work and a place to sleep.", importance=4, public=True, data={"kind": key})
-        elif key == "break_in":
-            loss = min(max(0, h["savings"]), r.randint(5, 60)); h["savings"] -= loss
-            ev("town_event", actors=members, text=f"Someone broke into the {sn} house and took ${loss}.", importance=7, public=True, data={"kind": key, "said": f"Somebody broke into the {sn} place."})
-        elif key == "car_wreck":
-            p["injury"] = max(p["injury"], r.randint(5, 40))
-            if r.random() < 0.06: self.kill(p, "was killed in a car wreck on the county road", ev)
-            else: ev("town_event", actors=[p["id"]], text=f"{p['name']} is hurt in a wreck on the county road.", importance=7, public=True, data={"kind": key})
-        elif key == "house_fire" and self.places.get(h["place"], {}).get("kind") == "home": self.house_fire(h, ev)
-        elif key == "barn_fire":
-            cost = r.randint(80, 600); h["savings"] -= cost * 0.3; h["repairs_needed"] = h.get("repairs_needed", 0) + cost
-            ev("town_event", actors=members, text=f"The {plural(sn)}' barn and shed burn in the night.", importance=7, public=True, data={"kind": key})
-        elif key == "inheritance":
-            amt = int(math.exp(r.gauss(math.log(700), 0.9))); h["savings"] += amt
-            ev("town_event", actors=members, text=f"The {plural(sn)} inherit ${amt} from a relative back east.", importance=7, public=False, data={"kind": key, "said": f"The {plural(sn)} came into some money from a relative."})
-        elif key == "epidemic":
-            sick = []
-            for q in self.living():
-                if not q["illness"] and r.random() < 0.18:
-                    q["illness"] = {"name": "the flu", "serious": q["age"] > 70 or q["age"] < 2, "days": r.randint(5, 12)}; sick.append(q["name"])
-            ev("town_event", actors=[self.by_name(n)["id"] for n in sick[:6]], text=f"A bad flu goes around {t}." + (f" Down sick: {', '.join(sick[:6])}." if sick else ""), importance=6, public=True, data={"kind": key, "said": "A bad flu is going around."})
-        elif key == "new_doctor": ev("town_event", text=f"A young doctor opens an office in {t}.", importance=6, public=True, data={"kind": key})
-        elif key == "bank_trouble":
-            for x in hh: x["savings"] -= max(0, x["savings"]) * r.uniform(0.0, 0.15)
-            ev("town_event", text="The county bank is in trouble; folks lose part of their savings.", importance=8, public=True, data={"kind": key})
-        elif key == "film_crew": ev("town_event", text="A Hollywood film crew comes through looking for a small-town location.", importance=7, public=True, data={"kind": key})
-        elif key == "highway_rumor": ev("town_event", text="Word is the state might run a new highway near town.", importance=5, public=True, data={"kind": key})
-        elif key == "school_fight": ev("town_event", text="The county wants to close the schoolhouse and bus the children to the next town.", importance=6, public=True, data={"kind": key})
-
+    # (The old hand-written happenings/town-event lists were removed Nov 18: the world step in fate.py replaced them.)
     def house_fire(self, h, ev, sev=None):
         """A house fire: realistic odds (chimneys, stoves, wiring). Severity by dice; a destroyed home leaves the family burned out."""
         r = self.rng; sn = h["surname"]; members = [i for i in h["members"] if self.people[i]["alive"] and not self.people[i]["offtown"]]
@@ -745,9 +642,9 @@ class World:
     def snapshot(self):
         return {"day": self.day, "date": self.date_str, "season": self.season, "weather": dict(self.weather.get("today", {})), "season_label": self.weather.get("season_label"),
                 "people": {pid: {k: p[k] for k in ("name", "age", "sex", "alive", "location", "offtown", "job", "household", "needs", "illness", "injury")} for pid, p in self.people.items()},
-                "households": {hid: {"surname": h["surname"], "savings": round(h["savings"]), "debt": h["debt"], "members": h["members"], "condition": (self.places.get(h["place"]) or {}).get("condition", 1.0), "has_tv": h["has_tv"], "place": h["place"], "homeless": bool(h.get("homeless"))} for hid, h in self.households.items()},
+                "households": {hid: {"surname": h["surname"], "savings": round(h["savings"]), "debt": h["debt"], "members": h["members"], "condition": (self.places.get(h["place"]) or {}).get("condition", 1.0), "has_tv": h["has_tv"], "place": h["place"], "homeless": bool(h.get("homeless")), **econ.snapshot_bits(self, h)} for hid, h in self.households.items()},
                 "companies": {cid: {"name": c["name"], "cash": round(c["cash"]), "employees": list(c["employees"]), "owner": c["owner"], "status": c["status"], "industry": c.get("industry", "")} for cid, c in self.companies.items()},
-                "town": {"treasury": self.town["treasury"], "offices": dict(self.town["offices"]), "laws": list(self.town["laws"])},
+                "town": {"treasury": self.town["treasury"], "offices": dict(self.town["offices"]), "laws": list(self.town["laws"]), "store_level": self.shops["store"]["level"], "meal": round(self.shops["diner"]["meal"] * history.price_index(self.date.year), 2)},
                 # what the camera can see: house condition, fires, new buildings (a record only; nothing here feeds back into the town)
                 "places": {k: {x: v[x] for x in ("name", "kind", "condition", "burned", "rebuilt", "built", "owner", "household", "vacant") if x in v} for k, v in self.places.items() if v.get("kind") in ("home", "building", "business", "camp")}}
 

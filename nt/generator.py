@@ -3,7 +3,7 @@ Rolls a complete starting town from one seed. Our only input is the pools and od
 Run once, publish the output and the fingerprint (sha256 of this file + seed)."""
 import json, hashlib, random, sys, math
 
-VERSION = "gen-0.7"
+VERSION = "gen-0.8"
 # Decided Nov 18 (Aaron): every town starts on January 1, 1950. One episode = one calendar year; one season = one decade
 # (Season 1 = 1950-1959). The start is a format choice, like the 1950s themselves; everything about the town is still rolled.
 START_YEAR = 1950
@@ -88,6 +88,41 @@ INTERESTS_YOUTH = ["sandlot baseball", "comic books", "marbles", "fishing at the
 FAITH = {"goes to church every Sunday": 45, "goes to church most Sundays": 20, "goes to church at Christmas and Easter": 18, "doesn't go to church": 12, "keeps a quiet private faith": 5}
 GRUDGES = ["a property-line dispute", "an unpaid loan", "a business deal gone bad", "an old insult at a town dance", "a stolen sweetheart",
            "a dog that killed chickens", "a lost election years ago", "an inheritance fight"]
+
+
+# What each resident wants most out of life (approved by Aaron, Nov 18 10:12pm). Rolled at generation, never assigned by us.
+# The weights are our estimate of real-life mixes (no survey gives exact shares): security and family by far the most common,
+# then a quiet life; money, land, a good name, being your own boss, adventure and getting out of town are rarer, and the
+# young lean toward getting out and adventure. A goal is a fact about who someone is; nothing in the rules rewards it.
+GOALS = {
+    "security": "to keep your family secure: steady work, a roof over your head and money put by for hard times",
+    "family": "a good family life: a happy home and children who turn out well",
+    "family_single": "to marry and have a family of your own",
+    "quiet": "a quiet, easy life without trouble",
+    "money": "to make real money and be well-off, maybe rich",
+    "land": "to own land and property of your own",
+    "respect": "to be respected in town: a good name and a say in how things are run",
+    "boss": "to be your own boss, with a business of your own",
+    "adventure": "to see something of the world and have some adventures while you can",
+    "out": "to get out of this town for good and make a life somewhere bigger",
+}
+GOAL_WEIGHTS = {  # (under 25, 25-59, 60 and over)
+    "security": (14, 30, 26), "family": (18, 24, 14), "quiet": (3, 10, 30), "money": (12, 8, 3), "land": (5, 7, 4),
+    "respect": (5, 8, 9), "boss": (7, 7, 2), "adventure": (12, 3, 2), "out": (24, 3, 1),
+}
+
+
+def roll_goals(town):
+    """A separate dice stream (seeded from the town's seed), so adding goals didn't change anything else any seed rolls."""
+    r = random.Random(town["seed"] * 7907 + 3)
+    for h in town["households"]:
+        for p in h["members"]:
+            if p["age"] < 14: continue
+            band = 0 if p["age"] < 25 else 1 if p["age"] < 60 else 2
+            ks = list(GOAL_WEIGHTS); k = r.choices(ks, [GOAL_WEIGHTS[x][band] for x in ks])[0]
+            if k == "family" and p["role"] in ("single", "boarder", "child") and p["age"] >= 16: k = "family_single"
+            if k == "boss" and (p.get("job") or "").startswith(("owner", "runs the")): k = "money"  # already their own boss (consistency, like faith and church)
+            p["goal"] = GOALS[k]; p["goal_kind"] = k
 
 
 def wchoice(r, d): ks = list(d); return r.choices(ks, [d[k] if not isinstance(d[k], tuple) else d[k][0] for k in ks])[0]
@@ -255,6 +290,7 @@ def generate(seed):
     town["treasury"] = int(pop * math.exp(r.gauss(math.log(80), 0.45)))  # a working small-town treasury, not a crisis
     town["households"] = households; town["history_links"] = links
     town["population"] = sum(len(h["members"]) for h in households)
+    roll_goals(town)
     return town
 
 

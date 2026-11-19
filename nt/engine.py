@@ -7,7 +7,7 @@ from .minds import LiveMind, MockMind, Memory
 from .referee import Referee, apply_effects
 from .llm import LLM, BudgetExceeded
 from .fate import Fate
-from . import history
+from . import history, econ, law
 
 OVERHEAR_QUIRKS = {"nosy", "gossip", "busybody"}
 
@@ -21,7 +21,7 @@ class Engine:
         self.mind = LiveMind(self.llm) if mode == "live" else MockMind(gen["seed"])
         self.est = {"plan_calls": 0, "plan_in_chars": 0, "say_calls": 0, "say_in_chars": 0, "sys_chars": 0}
         self.ref = Referee(self.llm, mode, gen["seed"])
-        self.fate = Fate(self, gen["seed"]); self.w.fate = self.fate
+        self.fate = Fate(self, gen["seed"]); self.w.fate = self.fate; self.w.engine = self
         from collections import defaultdict
         self.w.minds_memory = defaultdict(Memory, {pid: Memory() for pid in self.w.people})
         self.events, self.dialogues = [], []
@@ -85,7 +85,7 @@ class Engine:
         """A day the world runs without the residents' minds: physics, money, life and death, events. Everyone stays home."""
         w = self.w; w.slot = 0
         if w.season != w.weather["season"]: w.roll_season(self.ev)
-        w.outside_day(self.ev); w.roll_day_weather(self.ev); w.economy_day(self.ev); w.life_day(self.ev); self.fate.daily(self.ev)
+        w.outside_day(self.ev); w.roll_day_weather(self.ev); w.economy_day(self.ev); self.money_calendar(); w.life_day(self.ev); self.fate.daily(self.ev)
         self.election_calendar(); self.books_note(); self.newcomers()
         for p in w.living(): p["location"] = w.households[p["household"]]["place"]
         for si in range(4):
@@ -112,7 +112,7 @@ class Engine:
         if not lived: return self.world_day()
         w = self.w; w.slot = 0
         if w.day == 0 or w.season != w.weather["season"]: w.roll_season(self.ev)
-        w.outside_day(self.ev); w.roll_day_weather(self.ev); w.economy_day(self.ev); w.life_day(self.ev); self.fate.daily(self.ev)
+        w.outside_day(self.ev); w.roll_day_weather(self.ev); w.economy_day(self.ev); self.money_calendar(); w.life_day(self.ev); self.fate.daily(self.ev)
         self.election_calendar()
         self.books_note()
         self.newcomers()
@@ -194,6 +194,12 @@ class Engine:
         self.snap_f.write(json.dumps(w.snapshot()) + "\n"); self.snap_f.flush()
         w.day += 1; w.date += dt.timedelta(days=1)
 
+    def money_calendar(self):
+        """Loan payments, interest, town salaries and each family's look at the books on the 1st; owners' weekly books and the Sunday paper."""
+        w = self.w
+        if w.date.day == 1: econ.monthly(self, self.ev); law.monthly(self, self.ev)
+        if w.date.weekday() == 6: econ.weekly(self, self.ev)
+
     def kid_routine(self, p, sname):
         w = self.w; home = w.households[p["household"]]["place"]
         if sname in ("morning", "midday") and w.date.weekday() < 5 and 6 <= p["age"]: p["location"] = "school"
@@ -270,14 +276,23 @@ class Engine:
         elif do in ("home", "sleep"):
             p["needs"]["energy"] = min(100, p["needs"]["energy"] + (40 if do == "sleep" else 10))
         elif do == "eat_at_diner":
-            meal = round(0.6 * history.price_index(w.date.year), 2)  # a diner meal at that year's prices
-            p["location"] = "diner"; h["savings"] -= meal; dh = w.places["diner"]["household"]
-            if dh in w.households: w.households[dh]["savings"] += meal
+            closed = econ.is_closed(w, "diner")
+            if closed: w.minds_memory[p["id"]].add(w.day, w.slot, f"The diner is closed by town law {closed['id']}."); return None
+            meal = round(w.shops["diner"]["meal"] * history.price_index(w.date.year), 2)  # the price the owner set
+            p["location"] = "diner"; dh = w.shops["diner"]["owner_h"]
+            if dh != h["id"]:
+                h["savings"] -= meal
+                if dh in w.households: w.households[dh]["savings"] += meal; w.earned(w.households[dh], meal); w.shops["diner"]["meals"] += 1
             p["needs"]["hunger"] = 0; p["needs"]["social"] += 10
         elif do == "shop":
+            closed = econ.is_closed(w, "store")
+            if closed: w.minds_memory[p["id"]].add(w.day, w.slot, f"The general store is closed by town law {closed['id']}."); return None
+            if econ.match_good(detail) and econ.match_good(detail) != "house":
+                did, _ok = econ.buy(self, p, detail, amt, "store"); self.did[p["id"]][-1] = (SLOTS[w.slot], did); p["location"] = "store"; return None
             p["location"] = "store"; spend = min(max(1, amt or 3), max(0, h["savings"])); h["savings"] -= spend
-            sh = w.places["store"]["household"]
-            if sh in w.households: w.households[sh]["savings"] += spend * 0.3
+            sh = w.shops["store"]["owner_h"]; st = w.shops["store"]
+            if sh in w.households and sh != h["id"]:
+                m = spend * (1 - econ.WHOLESALE / st["level"]); w.households[sh]["savings"] += m; w.earned(w.households[sh], m); st["week"] += m; st["week_sales"] += spend
         elif do in ("talk", "court", "ask_loan", "propose_marriage", "end_relationship") and q and q["id"] != p["id"]:
             if q["offtown"] or not q["alive"]: w.minds_memory[p["id"]].add(w.day, w.slot, f"I wanted to talk to {q['name']} but they're not around.", 2); return None
             if q["location"] != p["location"]:
@@ -316,6 +331,40 @@ class Engine:
                 if do == "lend": h.setdefault("loans_out", []).append({"to": q["id"], "amount": amt, "day": w.day})
                 self.did[p["id"]][-1] = (SLOTS[w.slot], f"{'paid' if do == 'pay' else 'gave' if do == 'give' else 'lent'} {q['name']} ${int(amt)}")  # yesterday = what happened, not the plan
                 self.ev(do, actors=[p["id"], q["id"]], text=f"{p['name']} {do}s {q['name']} ${int(amt)}" + (f" ({detail})" if detail else "") + ".", importance=5, place=place)
+        elif do == "buy" and detail:
+            did, handled = econ.buy(self, p, detail, amt, a.get("place") or place)
+            if not handled:  # not something sold off a shelf or a lot: the referee rules on it like any attempt
+                do, detail = "attempt", "buy " + detail
+                return self._apply_ruling(p, do, detail, ruling if ruling is not None else self.rule_for(p, do, detail, amt), place)
+            self.did[p["id"]][-1] = (SLOTS[w.slot], did)
+        elif do == "shop_at":
+            where = "county seat" if re.search(r"county|seat|town over|city|elsewhere|a&p|supermarket", detail.lower()) else "store"
+            if h.get("groceries_at", "store") != where:
+                h["groceries_at"] = where
+                for i in h["members"]:
+                    if w.people[i]["alive"] and w.people[i]["age"] >= 18: w.minds_memory[i].add(w.day, w.slot, f"From now on we buy our groceries {'in the county seat' if where != 'store' else 'at the general store'}.")
+                self.ev("shop_choice", actors=[p["id"]], text=f"The {h['surname']} household starts buying its groceries {'in the county seat' if where != 'store' else 'at the general store'}.", importance=3)
+            self.did[p["id"]][-1] = (SLOTS[w.slot], f"decided we'd buy groceries {'in the county seat' if where != 'store' else 'at the general store'}")
+        elif do == "set_price":
+            r = econ.set_price(self, p, a.get("place"), amt, detail)
+            if r: self.did[p["id"]][-1] = (SLOTS[w.slot], r)
+        elif do == "set_wage":
+            r = econ.set_wage(self, p, q, amt, detail)
+            if r: self.did[p["id"]][-1] = (SLOTS[w.slot], r)
+        elif do == "bank_loan":
+            banks = econ.local_banks(w); tl = (str(tgt or "") + " " + detail).lower()
+            b = next((x for x in banks if x["name"].lower() in tl or w.name(x["owner"]).lower() in tl or (q and q["id"] == x["owner"])), None)
+            r = econ.local_bank_apply(self, p, b, amt, detail) if b else econ.county_bank(self, p, amt, detail)
+            if r: self.did[p["id"]][-1] = (SLOTS[w.slot], r)
+        elif do in ("approve_loan", "deny_loan"):
+            r = econ.decide_application(self, p, q, do == "approve_loan", amt, detail)
+            if r: self.did[p["id"]][-1] = (SLOTS[w.slot], r)
+        elif do in ("deposit", "withdraw"):
+            r = econ.deposit(self, p, amt, str(tgt or "") + " " + detail, out=do == "withdraw")
+            if r: self.did[p["id"]][-1] = (SLOTS[w.slot], r)
+        elif do == "enforce":
+            r = law.enforce(self, p, q, detail)
+            if r: self.did[p["id"]][-1] = (SLOTS[w.slot], r)
         elif do == "declare_candidacy":
             self.declare(p, detail)
         elif do == "vote":
@@ -324,26 +373,43 @@ class Engine:
             mid = f"M{len(w.town['motions']) + 1}"
             w.town["motions"].append({"id": mid, "text": detail, "by": p["id"], "day": w.day, "status": "open", "votes": {}})
             self.ev("measure_proposed", actors=[p["id"]], text=f"{p['name']} proposes measure {mid}: \"{detail}\"", importance=6, public=True)
+        elif do == "apply_job" and q and econ.shop_of(w, q) and not self.company_of(q):
+            k = econ.shop_of(w, q); nm = "the diner" if k == "diner" else "the general store"
+            self.pending.setdefault(q["id"], []).append(f"{p['name']} has asked you for work at {nm}.")
+            self.ev("job_application", actors=[p["id"], q["id"]], text=f"{p['name']} asks {q['name']} for work at {nm}.", importance=4)
         elif do == "apply_job":
             co = self.company_of(q) if q else w.companies.get("co1")
             if co and p["id"] not in co["employees"]:
                 self.applications.append((p["id"], co["id"])); self.pending.setdefault(co["owner"], []).append(f"{p['name']} has asked you for a job at {co['name']}.")
                 self.ev("job_application", actors=[p["id"], co["owner"]], text=f"{p['name']} asks {w.name(co['owner'])} for a job at {co['name']}.", importance=4)
+        elif do in ("hire", "fire") and q and not self.company_of(p) and econ.shop_of(w, p):
+            k = econ.shop_of(w, p)
+            if do == "hire":
+                r = econ.shop_hire(self, p, q, k, amt)
+                if r: self.did[p["id"]][-1] = (SLOTS[w.slot], r)
+            elif q.get("shop_job") == k:
+                econ.shop_leave(w, q); q["job"] = "out of work"
+                self.ev("fired", actors=[p["id"], q["id"]], text=f"{p['name']} lets {q['name']} go from {'the diner' if k == 'diner' else 'the general store'}." + (f" ({detail})" if detail else ""), importance=7, public=True)
         elif do in ("hire", "fire") and q:
             co = self.company_of(p)
             if co:
                 if do == "hire" and q["id"] not in co["employees"] and q["age"] >= 14:
                     if q.get("employer") and q["employer"] in w.companies and q["id"] in w.companies[q["employer"]]["employees"]: w.companies[q["employer"]]["employees"].remove(q["id"])
-                    co["employees"].append(q["id"]); q["employer"] = co["id"]; q["job"] = f"works at {co['name']}"
+                    econ.shop_leave(w, q); co["employees"].append(q["id"]); q["employer"] = co["id"]; q["job"] = f"works at {co['name']}"
+                    if amt and amt > 0: q["wage_day"] = round(max(amt / 5.5, econ.min_wage_day(w, co)), 3)
                     self.ev("hired", actors=[p["id"], q["id"]], text=f"{p['name']} hires {q['name']} at {co['name']}.", importance=6, public=True)
                 elif do == "fire" and q["id"] in co["employees"]:
                     w.unemployment_claim(co, [q["id"]], firm_size=len(co["employees"]))
                     co["employees"].remove(q["id"]); q["employer"] = None; q["job"] = "out of work"
                     self.ev("fired", actors=[p["id"], q["id"]], text=f"{p['name']} fires {q['name']} from {co['name']}." + (f" ({detail})" if detail else ""), importance=8, public=True)
+        elif do == "quit_job" and p.get("shop_job"):
+            k = p["shop_job"]; econ.shop_leave(w, p); p["job"] = "out of work"
+            boss = next((x["id"] for x in econ.shop_runners(w, k)), None)
+            self.ev("quit", actors=[p["id"]] + ([boss] if boss else []), text=f"{p['name']} quits {'the diner' if k == 'diner' else 'the general store'}.", importance=6, public=True)
         elif do == "quit_job" and p.get("employer"):
             co = w.companies[p["employer"]]
             if p["id"] in co["employees"]: co["employees"].remove(p["id"])
-            p["employer"] = None; p["job"] = "out of work"; self.ev("quit", actors=[p["id"], co["owner"]], text=f"{p['name']} quits {co['name']}.", importance=6, public=True)
+            p["employer"] = None; p.pop("wage_day", None); p["job"] = "out of work"; self.ev("quit", actors=[p["id"], co["owner"]], text=f"{p['name']} quits {co['name']}.", importance=6, public=True)
         elif do == "leave_town":
             kind = "hollywood" if "hollywood" in detail.lower() else "college" if "college" in detail.lower() else "army" if "army" in detail.lower() or "enlist" in detail.lower() else "city"
             w.leave_town(p, detail or "the city", self.ev, kind=kind)
@@ -366,6 +432,7 @@ class Engine:
             if ru.get("possible"):
                 apply_effects(w, ru.get("effects"), self.ev, p)
                 vis = ru.get("visibility", "private")
+                if ru.get("breaks"): law.record_breach(self, p, ru["breaks"] if isinstance(ru["breaks"], list) else [ru["breaks"]], ru.get("outcome", ""), vis)
                 self.ev("outcome", actors=[p["id"]], text=ru.get("outcome", ""), importance=int(ru.get("importance", 4) or 4), public=vis == "public", place=place if vis == "witnessed" else None)
             else:
                 w.minds_memory[p["id"]].add(w.day, w.slot, f"It didn't work: {ru.get('outcome', '')}", 4)
@@ -422,6 +489,7 @@ class Engine:
         for x, y in ((a, b), (b, a)):
             w.minds_memory[x["id"]].add(w.day, w.slot, f"Talked with {y['name']} ({medium}): {gist}", 5 if kind != "talk" else 4)
             x["needs"]["social"] = min(100, x["needs"]["social"] + 12)
+        econ.pay_gossip(self, a, b)
         imp = 4 + (2 if deal_log else 0) + (2 if kind in ("propose_marriage", "end_relationship", "ask_loan") else 0)
         self.ev("conversation", actors=[a["id"], b["id"]], text=f"{a['name']} and {b['name']} talk ({medium}){': ' + purpose if purpose else ''}.", importance=imp, data={"dialogue_index": len(self.dialogues) - 1})
         # deals become real
@@ -575,11 +643,8 @@ class Engine:
                 if yes == no and mayor in m["votes"]: yes += m["votes"][mayor]; no += not m["votes"][mayor]
                 if yes + no == 0 and w.day - m["day"] < 14: continue
                 m["status"] = "passed" if yes > no else "failed"
-                if m["status"] == "passed":
-                    w.town["laws"].append({"text": m["text"], "day": w.day, "by": m["by"]})
-                    t = re.search(r"tax[^$]*\$\s?(\d+)", m["text"].lower())
-                    if t: w.town["tax_per_household_quarter"] = int(t.group(1))
                 self.ev("measure_vote", actors=[m["by"]] + council, text=f"Council vote on {m['id']} (\"{m['text']}\"): {m['status']} ({yes} yes, {no} no).", importance=7, public=True)
+                if m["status"] == "passed": law.enact(self, m)  # the clerk writes down what it binds; the town follows it from today (Nov 18)
 
     def needs_tick(self):
         for p in self.w.living():
@@ -616,7 +681,7 @@ class Engine:
         import threading
         if not hasattr(self, "fate"): self.fate = Fate(self, self.w.gen["seed"] + self.w.day)
         if not hasattr(self.w, "threads"): self.w.threads = []
-        self.w.fate = self.fate
+        self.w.fate = self.fate; self.w.engine = self
         self.out = out; self.llm = llm; self.mode = mode; self._lock = threading.RLock()
         self.mind = LiveMind(llm) if mode == "live" else MockMind(self.w.gen["seed"] + self.w.day)
         self.ref = Referee(llm, mode, self.w.gen["seed"] + self.w.day)
