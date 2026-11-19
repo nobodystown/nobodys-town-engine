@@ -85,13 +85,15 @@ class Engine:
         """A day the world runs without the residents' minds: physics, money, life and death, events. Everyone stays home."""
         w = self.w; w.slot = 0
         if w.season != w.weather["season"]: w.roll_season(self.ev)
-        w.outside_day(self.ev); w.roll_day_weather(self.ev); w.economy_day(self.ev); self.money_calendar(); w.life_day(self.ev); self.fate.daily(self.ev)
+        w.outside_day(self.ev); w.roll_day_weather(self.ev); w.economy_day(self.ev); self.money_calendar(); w.life_day(self.ev)
+        warming = getattr(self, "warming", False)  # TEST-only fast-forward: rules only, no world step, no threads (never set on the official town)
+        if not warming: self.fate.daily(self.ev)
         self.election_calendar(); self.books_note(); self.newcomers()
         for p in w.living(): p["location"] = w.households[p["household"]]["place"]
         for si in range(4):
             w.slot = si; self.needs_tick()
             if si == 3: self.night()
-        self.fate.step_threads(self.ev, weekly=w.date.weekday() == 6)
+        if not warming: self.fate.step_threads(self.ev, weekly=w.date.weekday() == 6)
         self.skipped = getattr(self, "skipped", 0) + 1
         self.snap_f.write(json.dumps(w.snapshot()) + "\n"); self.snap_f.flush()
         w.day += 1; w.date += dt.timedelta(days=1)

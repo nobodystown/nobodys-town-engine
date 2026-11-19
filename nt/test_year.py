@@ -2,7 +2,10 @@
 usage: python3 -m nt.test_year <seed> [--budget USD] [--days N] [--minutes M] [--mock]
   --budget   hard cap for THIS session's spend (the meter starts at 0 each session; earlier spend is in api_calls.jsonl)
   --days     stop after this many town-days in total (default 91 = one quarter)
-  --minutes  stop cleanly after about M minutes (keep foreground chunks under 9)"""
+  --minutes  stop cleanly after about M minutes (keep foreground chunks under 9)
+  --warm D   new runs only: fast-forward the first D days on rules alone (weather, money, illness, births, deaths), no minds,
+             no world step, no model calls; then go live. TEST towns only, to test a later season (every town starts Jan 1).
+             --days still counts from Jan 1, so --warm 120 --days 155 = 35 live days from May 1."""
 import json, os, pickle, sys, time
 from .generator import generate
 from .llm import LLM, BudgetExceeded
@@ -25,7 +28,15 @@ def main():
         e.reopen(run, LLM(mode, budget, os.path.join(run, "api_calls.jsonl")), mode)
     else:
         gen = generate(seed); gen["fingerprint"] = "TEST"; json.dump(gen, open(os.path.join(run, "world.json"), "w"), indent=1)
-        e = Engine(gen, run, mode, budget, workers=8)
+        warm = opt("--warm", 0)
+        if warm:
+            e = Engine(gen, run, "mock", budget); e.warming = True
+            while e.w.day < warm: e.world_day()
+            e.warming = False; e.close_files(); e.workers = 8
+            e.reopen(run, LLM(mode, budget, os.path.join(run, "api_calls.jsonl")), mode)
+            print(f"warmed {warm} days on rules alone -> {e.w.date_str}", flush=True)
+        else:
+            e = Engine(gen, run, mode, budget, workers=8)
     e.compress = True; t0 = time.time(); stop = None
     def save():
         tmp = state + ".tmp"; pickle.dump(e, open(tmp, "wb")); os.replace(tmp, state)
