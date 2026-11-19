@@ -337,6 +337,7 @@ class Engine:
                     co["employees"].append(q["id"]); q["employer"] = co["id"]; q["job"] = f"works at {co['name']}"
                     self.ev("hired", actors=[p["id"], q["id"]], text=f"{p['name']} hires {q['name']} at {co['name']}.", importance=6, public=True)
                 elif do == "fire" and q["id"] in co["employees"]:
+                    w.unemployment_claim(co, [q["id"]], firm_size=len(co["employees"]))
                     co["employees"].remove(q["id"]); q["employer"] = None; q["job"] = "out of work"
                     self.ev("fired", actors=[p["id"], q["id"]], text=f"{p['name']} fires {q['name']} from {co['name']}." + (f" ({detail})" if detail else ""), importance=8, public=True)
         elif do == "quit_job" and p.get("employer"):

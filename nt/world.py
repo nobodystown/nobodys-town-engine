@@ -225,7 +225,13 @@ class World:
             self.places[h["place"]]["condition"] = max(0.1, self.places[h["place"]]["condition"] - cost / 1500)
             h.setdefault("repairs_needed", 0); h["repairs_needed"] += cost; dmg_txt.append(f"{h['surname']} house (${cost})")
         if severity != "minor" and self.companies:
-            c = self.companies["co1"]; loss = int({"serious": 600, "severe": 2500}[severity] * self.rng.uniform(0.5, 1.5)); c["cash"] -= loss; dmg_txt.append(f"{c['name']} (${loss})")
+            # a business loses in proportion to its size: lost days of work plus the repair bill its insurance doesn't cover
+            # (half a week to a week and a half of output for a serious hit, 2-5 weeks for a severe one; most repairs were insured).
+            # A closed business has nothing left to lose.
+            c = self.companies["co1"]
+            if c["status"] == "open":
+                week = max(1, len(c["employees"])) * c["productivity"] * 6 * history.wage_index(self.date.year)
+                loss = int(week * self.rng.uniform(*{"serious": (0.5, 1.5), "severe": (2, 5)}[severity])); c["cash"] -= loss; dmg_txt.append(f"{c['name']} (${loss})")
         hurt = []
         for p in self.living():
             if self.rng.random() < {"minor": 0.0, "serious": 0.02, "severe": 0.06}[severity]:
@@ -253,11 +259,59 @@ class World:
         if store_h in self.households and store_h != h["id"]:  # a share of it is bought at the general store
             self.households[store_h]["savings"] += other * 0.1 * 0.22; self.earned(self.households[store_h], other * 0.1 * 0.22)
 
+    def unemployment_claim(self, c, laid, firm_size=None):
+        """Laid-off or fired hands of a covered firm can draw unemployment pay (not if they quit; firms too small aren't covered)."""
+        if (firm_size or len(laid)) < history.ui_min_firm(self.date.year): return
+        W = history.wage_index(self.date.year)
+        for i in laid:
+            q = self.people[i]
+            if q["alive"]: q["ui"] = {"weeks": history.UI_WEEKS, "amount": round(min(0.5 * c["wage_day"] * W * 5.5, history.UI_MAX_1950 * W), 2)}
+
+    def social_security(self, h):
+        """The monthly Social Security check(s) for this household, on the first of the month. Who draws it was decided by the
+        dice in proportion to the real share of older people covered that year; a beneficiary who still works for pay gets no check."""
+        y, mo = self.date.year, self.date.month; yy = max(1950, min(1959, y)); total = 0
+        prev = history.SS_AGED_SHARE.get(yy - 1); share = history.SS_AGED_SHARE[yy]
+        members = [self.people[i] for i in h["members"] if self.people[i]["alive"]]
+        for q in members:
+            old_age = 65 if q["sex"] == "male" or self.date_str < history.SS_WOMEN_62_FROM else 62
+            if q["age"] >= old_age and not q.get("ss"):
+                if q.get("ss_rolled") != y:  # once a year: newly covered old people come on the rolls as the real share grows
+                    q["ss_rolled"] = y
+                    first = not q.get("ss_seen"); q["ss_seen"] = True
+                    p_on = share if first or prev is None else max(0.0, (share - prev) / max(0.01, 1 - prev))
+                    if self.rng.random() < p_on: q["ss"] = True
+            if not q.get("ss"): continue
+            working = (q.get("employer") or job_pay(q.get("job"))) and q["age"] < history.ss_work_exempt_age(y)
+            if working: continue
+            kind = "retired_man" if q["sex"] == "male" else ("retired_woman" if q.get("job") not in (None, "homemaker") else "wife")
+            if q["sex"] == "female" and q.get("widowed"): kind = "widow"
+            total += history.ss_amount(kind, y, mo)
+        # survivors of a covered worker: a widow 65+ (62 from late 1956), or a mother with children under 18, and the children
+        dead = self.people.get(h.get("survivor_of"))
+        if dead:
+            kids = [q for q in members if q["age"] < 18 and dead["id"] in (q.get("parents") or [])]
+            moms = [q for q in members if q.get("widowed") and q["sex"] == "female" and q.get("spouse") == dead["id"] and not q.get("ss")]
+            fam = sum(history.ss_amount("child", y, mo) for _ in kids)
+            for q in moms:
+                widow_age = 65 if self.date_str < history.SS_WOMEN_62_FROM else 62
+                if kids or q["age"] >= widow_age: fam += history.ss_amount("mother" if kids else "widow", y, mo)
+            total += min(fam, 2.0 * history.ss_amount("retired_man", y, mo))  # family maximum (about double a worker's check)
+            if not kids and not moms: h.pop("survivor_of", None)
+        if total > 0:
+            h["savings"] += total; self.earned(h, total); h["ss_month"] = round(total, 2)
+
     def wages_day(self, ev, W):
         """Everyone with a paying job earns (company hands are paid by their company's payroll instead)."""
         weekday = self.date.weekday(); hit = bool(self.weather["today"].get("disaster")); s = self.season
         dh, sh = self.places["diner"].get("household"), self.places["store"].get("household")
         for p in self.living():
+            if p.get("ui"):  # unemployment pay, every Friday, until they work again or it runs out
+                if p.get("employer") or job_pay(p.get("job")): p.pop("ui")
+                elif weekday == 4:
+                    hh = self.households[p["household"]]; hh["savings"] += p["ui"]["amount"]; self.earned(hh, p["ui"]["amount"])
+                    p["ui"]["weeks"] -= 1
+                    if p["ui"]["weeks"] <= 0: p.pop("ui")
             if p["age"] < 14 or p.get("employer"): continue
             jp = job_pay(p.get("job"))
             if not jp: continue
@@ -296,7 +350,7 @@ class World:
                 c["cash"] -= pay
                 c["broke_days"] = c.get("broke_days", 0) + 7 if c["cash"] < 0 else 0
                 if c["broke_days"] >= 70 and c["status"] == "open":  # ten weeks in the red: it shuts its doors
-                    c["status"] = "closed"; laid = list(c["employees"]); c["employees"] = []
+                    c["status"] = "closed"; laid = list(c["employees"]); self.unemployment_claim(c, laid); c["employees"] = []
                     for i in laid: self.people[i]["employer"] = None; self.people[i]["job"] = "out of work"
                     ev("company_closed", actors=[c["owner"]] + laid, text=f"{c['name']} closes its doors for good.", importance=9, public=True, data={"laid_off": len(laid)})
                 if c["cash"] < 0 and not c.get("warned_broke"):
@@ -319,6 +373,7 @@ class World:
             if store_h in self.households and store_h != h["id"]: self.households[store_h]["savings"] += food * 0.22; self.earned(self.households[store_h], food * 0.22)  # store margin
             if self.date.day == 1:
                 hc = h["monthly_housing"] * (P if h["home"] == "rented" else 1.0); h["savings"] -= hc  # rents follow prices; a mortgage payment is fixed
+                self.social_security(h)
                 self.living_costs(h, n, P, hc, store_h)
                 if h["debt"] > 0: h["debt"] = int(h["debt"] * 1.005)
                 if h["monthly_housing"] > 0:  # behind on rent or the mortgage: landlords evict after 3 months, the bank forecloses after 6
@@ -420,6 +475,9 @@ class World:
         for c in self.companies.values():
             if p["id"] in c["employees"]: c["employees"].remove(p["id"])
         if p.get("spouse") and p["spouse"] in self.people: self.people[p["spouse"]]["widowed"] = True
+        # Social Security survivors: if the one who died drew benefits, or worked a job that counted toward Social Security
+        if p.get("ss") or ((p.get("employer") or job_pay(p.get("job"))) and self.rng.random() < history.SS_WORKER_COVERED.get(min(max(self.date.year, 1950), 1959), 0.9)):
+            self.households[p["household"]]["survivor_of"] = p["id"]
         ev("death", actors=[p["id"]], text=f"{p['name']} ({p['age']}) {cause}.", importance=10, public=True, data={"said": f"{p['name']} {cause}."})
 
     # ------------------------------------------------------------------ discoveries (rolled when someone digs / explores / builds)

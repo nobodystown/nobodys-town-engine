@@ -110,3 +110,38 @@ def market_mult(date_str):
 
 
 def at_war(date_str): return any(a <= date_str <= b for a, b in WARS)
+
+
+# ---- Social Security (Old-Age and Survivors Insurance), 1950s. Era data, published with the season.
+# Average monthly benefit in current-payment status, December of each year (SSA Annual Statistical Supplement, table 5.C2).
+# 1950 is split: the 1950 amendments raised checks from September 1950 (before that, about $26, the Dec 1949 average).
+SS_RETIRED = {1950: 43.86, 1951: 42.14, 1952: 49.25, 1953: 51.10, 1954: 59.14, 1955: 61.90, 1956: 63.09, 1957: 64.58, 1958: 66.35, 1959: 72.78}
+SS_RETIRED_EARLY_1950 = 26.00  # Jan-Aug 1950
+SS_WIFE = {1950: 23.60, 1951: 22.75, 1952: 26.01, 1953: 27.08, 1954: 31.81, 1955: 33.12, 1956: 33.76, 1957: 34.41, 1958: 35.11, 1959: 38.24}
+SS_CHILD = {1950: 17.05, 1951: 13.37, 1952: 14.67, 1953: 15.79, 1954: 18.53, 1955: 20.01, 1956: 20.63, 1957: 21.89, 1958: 22.99, 1959: 27.34}
+# Share of people 65+ drawing benefits: 2.1 million of about 12.3 million in mid-1950, 10.5 million of about 16.6 million in mid-1960
+# (SSA, Social Security Bulletin v24n1; census). Straight line between them; it was the main reason more of the old had an income.
+SS_AGED_SHARE = {y: round(0.17 + (0.63 - 0.17) * (y - 1950) / 10, 3) for y in range(1950, 1961)}
+# Share of workers whose job counted toward Social Security: about 60% in 1950; most of the self-employed added in 1951;
+# farmers added in 1955 (approximate, from the 1950 and 1954 amendments).
+SS_WORKER_COVERED = {1950: 0.60, 1951: 0.75, 1952: 0.75, 1953: 0.75, 1954: 0.75, 1955: 0.90, 1956: 0.90, 1957: 0.90, 1958: 0.90, 1959: 0.90}
+# Retirement test: a beneficiary who still works for pay gets no check, until this age (75; 72 from 1955).
+def ss_work_exempt_age(year): return 75 if year < 1955 else 72
+# Women could draw from 62 starting November 1956 (workers at 80%; widows in full).
+SS_WOMEN_62_FROM = "1956-11-01"
+
+# ---- Unemployment insurance (state programs). A laid-off employee of a covered firm draws about half the lost weekly
+# wage, up to a state maximum (about $25 a week in 1950, rising with wages), for up to 26 weeks. Quitting disqualifies.
+# Covered firms: 8 or more employees, 4 or more from 1956 (Federal Unemployment Tax Act). Farm work and the self-employed are not covered.
+UI_WEEKS = 26
+UI_MAX_1950 = 25.0
+def ui_min_firm(year): return 8 if year < 1956 else 4
+
+
+def ss_amount(kind, year, month=12):
+    """Monthly check for one person, in that year's dollars. kind: retired_man, retired_woman, wife, widow, child, mother."""
+    y = max(min(SS_RETIRED), min(max(SS_RETIRED), year))
+    base = SS_RETIRED_EARLY_1950 if (year == 1950 and month < 9) else SS_RETIRED[y]
+    scale = base / SS_RETIRED[y]
+    return round({"retired_man": base * 1.04, "retired_woman": base * 0.80, "wife": SS_WIFE[y] * scale, "widow": base * 0.75,
+                  "mother": base * 0.75, "child": SS_CHILD[y] * scale}[kind], 2)
