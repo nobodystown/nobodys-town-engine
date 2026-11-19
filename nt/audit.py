@@ -108,6 +108,8 @@ def main(run, lo=0, hi=10 ** 9):
     real_life(ev, sn, days)
     threads(ev)
     economy(ev, sn)
+    rt = collections.Counter(e["data"].get("kind") for e in ev if e["kind"] == "routine")
+    print(f"\nEVERYDAY RULES (no referee call): {sum(rt.values())} = " + ", ".join(f"{k} {v}" for k, v in rt.most_common()))
     big = [e for e in ev if e["importance"] >= 7 and e["kind"] not in ("conversation", "attempt", "outcome", "household_broke", "company_broke")]
     print(f"\nBIG EVENTS ({len(big)}):"); [print(f"  {e['date']} {e['kind']}: {e['text'][:120]}") for e in big[:15]]
 

@@ -7,7 +7,7 @@ from .minds import LiveMind, MockMind, Memory
 from .referee import Referee, apply_effects
 from .llm import LLM, BudgetExceeded
 from .fate import Fate
-from . import history, econ, law
+from . import history, econ, law, routine
 
 OVERHEAR_QUIRKS = {"nosy", "gossip", "busybody"}
 
@@ -172,7 +172,8 @@ class Engine:
                     w.minds_memory[p["id"]].add(w.day, w.slot, f"I went to {ep['name']}.")
                 todo.append((p, act))
             # free-form attempts go to the referee in parallel (everyone has already moved, so "who's here" is right)
-            ref_jobs = [(p, a) for p, a in todo if (a.get("do") or "").lower() in ("build", "start_business", "attempt", "write_letter", "sell") and a.get("detail")]
+            ref_jobs = [(p, a) for p, a in todo if (a.get("do") or "").lower() in ("build", "start_business", "attempt", "write_letter", "sell") and a.get("detail")
+                        and not routine.match(w, p, a.get("do"), a.get("detail"))]  # everyday doings are plain rules, not referee calls (Nov 18)
             rulings = {}
             if ref_jobs and self.workers > 1:
                 def job(pa):
@@ -315,6 +316,8 @@ class Engine:
             h["savings"] += pay; p["needs"]["energy"] -= 14
             w.minds_memory[p["id"]].add(w.day, w.slot, f"I earned ${pay:.2f} doing {detail or 'odd jobs'}.")
             self.did[p["id"]][-1] = (SLOTS[w.slot], f"side work ({detail[:60] or 'odd jobs'}), earned ${pay:.2f}")
+        elif do in ("sell", "write_letter", "attempt") and detail and routine.match(w, p, do, detail):
+            return self.everyday(p, do, detail, amt)
         elif do == "sell" and detail:
             do = "attempt"; detail = "sell " + detail
             ru = ruling if ruling is not None else self.rule_for(p, do, detail, amt)
@@ -416,6 +419,17 @@ class Engine:
         elif do in ("build", "start_business", "attempt", "write_letter") and detail:
             ru = ruling if ruling is not None else self.rule_for(p, do, detail, amt)
             return self._apply_ruling(p, do, detail, ru, place)
+        return None
+
+    def everyday(self, p, do, detail, amt):
+        """An ordinary doing handled by plain rules (routine.py): no referee call, nothing invented."""
+        kind = routine.match(self.w, p, do, detail)
+        did = routine.run(self, p, do, detail, amt, kind)
+        if isinstance(did, tuple):  # a conversation with one neighbor
+            return (p, did[1], detail, "in person", "talk")
+        if did:
+            self.did[p["id"]][-1] = (SLOTS[self.w.slot], did)
+            self.ev("routine", actors=[p["id"]], text=f"{p['name']}: {did}", importance=1, data={"no_memory": True, "kind": kind})
         return None
 
     def _apply_ruling(self, p, do, detail, ru, place):

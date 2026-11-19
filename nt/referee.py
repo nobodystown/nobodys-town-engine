@@ -1,7 +1,7 @@
 """Neutral referee: rules ONLY on whether a freeform attempt is physically/realistically possible and what follows.
 Locked instructions; published with the starting settings. Never judges story value, never enforces laws, never takes sides."""
 import random
-from . import econ, law
+from . import econ, law, routine
 
 REFEREE_RULES = """You are the neutral referee of a realistic simulation of a small American town. You are like the laws of physics and economics, nothing more.
 A resident has attempted an action. Decide only: (1) could a real person in this exact situation, place and era actually do this, and (2) what realistically follows.
@@ -17,6 +17,7 @@ RULES:
 - The actor's open matters are listed. If this attempt belongs to one of them, use that matter; never open a second thread for the same thing.
 - You are shown the actor's last few attempts. If this one repeats ground already covered, rule it as reality would: doing the same thing again usually turns up nothing new.
 - TOWN LAWS lists the town's own ordinances in force. If the attempt breaks one of the bans listed there, put that law's id in "breaks" (whether anyone notices or enforces it is not yours to decide; it still happens as reality would have it). Out in the wider world, state and federal law apply as usual.
+- GOVERNMENT, BUSINESSES, THE LAW and CHURCH are plain facts about the town: who holds office and when the council meets, who runs and works at each business. Never contradict them or add to them.
 - HOUSEHOLD DEBTS are the actor's real debts, exactly as the lender has them: no other fees, penalties or terms exist. A lender may agree to let missed payments slide (op loan_relief) at realistic 1950s odds; it is never certain.
 - Shop prices, wages and loans have their own rules in town: don't move money for buying goods off a shelf, borrowing from a bank, or setting pay (residents do those themselves). A private deal between two people is yours to rule on as usual.
 - Channel standards: self-harm or suicide is not possible as an action (return possible=false, no effects). No sexual content in outcome text. Children are never victims of violence or abuse (impossible). No outcome may be based on race, ethnicity or religion.
@@ -58,7 +59,7 @@ class Referee:
                + (f" Household owns: {econ.owns_text(w, h)}." if h.get("owns") else "") + "\n"
                + (f"HOUSEHOLD DEBTS (exact; there are no others): {econ.loans_text(w, h)}\n" if econ.loans_text(w, h) else "")
                + "OUTSIDE THE TOWN: the bank in the county seat holds the town's mortgages and bank loans (reached by telephone, letter or a trip); dealers and the mail-order catalog sell goods.\n"
-               + (f"TOWN LAWS: {' | '.join(law.law_lines(w, 12))}\n" if law.laws_in_force(w) else "") +
+               + (f"TOWN LAWS: {' | '.join(law.law_lines(w, 12))}\n" if law.laws_in_force(w) else "") + routine.fact_sheet(w) + "\n" +
                f"HOME: {w.places.get(h['place'], {}).get('name', 'none')} ({h['home']}). VACANT HOUSES: {', '.join(k + ' = ' + v['name'] for k, v in w.places.items() if v.get('vacant')) or 'none'}.\n"
                f"TOWN TREASURY: ${int(w.town['treasury'])}. MAIN EMPLOYER: {w.companies['co1']['name']} (cash ${int(w.companies['co1']['cash'])}).\n"
                f"PEOPLE IN TOWN: {'; '.join(q['name'] + ' (' + (q['job'] or q['role']) + ')' for q in w.living())}\n"

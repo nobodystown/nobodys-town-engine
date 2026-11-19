@@ -13,7 +13,7 @@ HOME = "/home/claude/nobodys_town"; OFFICIAL = os.path.join(HOME, "OFFICIAL"); T
 SEASON_DAYS = 365  # about one year per episode (smoke-test estimate only; real episodes end on December 31, see cmd_season)
 # Every file that decides what happens in town. fate.py (world events, rates, threads) and llm.py (which model plays which role)
 # were added Nov 18: before that, both could have been changed after the roll without the lock noticing.
-RULE_FILES = ("generator.py", "world.py", "history.py", "minds.py", "referee.py", "engine.py", "fate.py", "llm.py", "names.py", "econ.py", "law.py")  # econ + law added Nov 18
+RULE_FILES = ("generator.py", "world.py", "history.py", "minds.py", "referee.py", "engine.py", "fate.py", "llm.py", "names.py", "econ.py", "law.py", "routine.py")  # econ + law + routine added Nov 18
 
 
 def settings_fingerprint():

@@ -119,7 +119,7 @@ class World:
                     a["rel"][b["id"]] = {"affinity": 40 if {a["role"], b["role"]} != {"husband", "wife"} else 55, "trust": 50, "tags": ["family"]}
                     if {a["role"], b["role"]} == {"husband", "wife"}: a["spouse"] = b["id"]; a["rel"][b["id"]]["tags"].append("spouse")
                     if a["role"] in ("husband", "wife", "parent") and b["role"] == "child": b.setdefault("parents", []).append(a["id"]); a.setdefault("children", []).append(b["id"])
-        for k, nm in (("diner", "the diner"), ("store", "the general store"), ("town_hall", "the town hall"), ("school", "the schoolhouse"), ("company", g["company"]["name"])):
+        for k, nm in (("diner", "the diner"), ("store", "the general store"), ("town_hall", "the town hall"), ("school", "the schoolhouse"), ("church", "the church"), ("company", g["company"]["name"])):
             self.places[k] = {"name": nm, "kind": k, "x": 0}
         for lm in g["landmarks"]: self.places["lm_" + lm.replace(" ", "_")] = {"name": "the " + lm, "kind": "outdoors", "x": 0}
         self.places["lm_woods"] = {"name": "the open country outside town", "kind": "outdoors", "x": 0}
