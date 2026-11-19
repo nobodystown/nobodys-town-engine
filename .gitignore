@@ -1,0 +1,22 @@
+# secrets: never commit
+.secrets/
+*.key
+*anthropic_key*
+.env
+.env.*
+
+# run data and media (backed up to Drive, not git)
+nobodys_town/
+runs/
+rehearsal/
+*.pkl
+*.pkl.tmp
+*.jsonl
+*.mp4
+*.mp3
+*.wav
+*.tar.gz
+
+# python
+__pycache__/
+*.pyc
