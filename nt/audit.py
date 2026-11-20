@@ -64,7 +64,7 @@ def main(run, lo=0, hi=10 ** 9):
     print(f"== AUDIT {os.path.basename(run)}  days {sn[0]['day']}-{sn[-1]['day']} ({sn[0]['date']} to {sn[-1]['date']})  population {sum(1 for p in sn[-1]['people'].values() if p['alive'] and not p['offtown'])}")
     # cost and pace
     usd = collections.Counter(); n = collections.Counter()
-    for c in calls: usd[c["role"]] += c["usd"]; n[c["role"]] += 1
+    for c in calls: usd[c["role"]] += c.get("usd", 0); n[c["role"]] += 1
     if calls: print(f"\nCOST (whole run so far): ${sum(usd.values()):.2f} = " + ", ".join(f"{r} ${v:.2f} ({n[r]} calls)" for r, v in usd.most_common()))
     # loops
     L = loops(ev)
@@ -112,6 +112,40 @@ def main(run, lo=0, hi=10 ** 9):
     print(f"\nEVERYDAY RULES (no referee call): {sum(rt.values())} = " + ", ".join(f"{k} {v}" for k, v in rt.most_common()))
     big = [e for e in ev if e["importance"] >= 7 and e["kind"] not in ("conversation", "attempt", "outcome", "household_broke", "company_broke")]
     print(f"\nBIG EVENTS ({len(big)}):"); [print(f"  {e['date']} {e['kind']}: {e['text'][:120]}") for e in big[:15]]
+    outside_minds(run, dl, calls, names)
+
+
+COMMON_CAPS = set("""I I'm I'll I've I'd A The And But So Well Oh Now Then Yes No Not Mr Mrs Miss Ma Pa Mama Papa Daddy Mother Father Lord God
+Sunday Monday Tuesday Wednesday Thursday Friday Saturday January February March April May June July August September October November December
+Christmas Easter Doc Sheriff Marshal Mayor Reverend Pastor Father Sir Ma'am Honey Dear Okay OK Hey Hello Good Just What Why How Who Where When
+If It It's That's There This We You He She They Don't Can't Won't Maybe Well Look Listen Thank Thanks Yeah Uh Um Ain't Let Let's Come Go""".split())
+
+
+def outside_minds(run, dl, calls, names):
+    """Residents with a mind from another lab (outside_minds.json) next to the Claude residents: how they talk, what they invent."""
+    path = os.path.join(run, "outside_minds.json")
+    if not os.path.exists(path): return
+    om = json.load(open(path)); group = lambda name: om.get(name, "claude").split("/")[0]
+    words = set()
+    for n in names.values(): words.update(n.split())
+    st = collections.defaultdict(lambda: {"people": set(), "lines": 0, "words": 0, "std": 0, "odd": collections.Counter(), "money": 0})
+    for d in dl:
+        for sp, t in d["lines"]:
+            g = st[group(sp)]; g["people"].add(sp); g["lines"] += 1; g["words"] += len(t.split())
+            if STANDARDS.search(t): g["std"] += 1
+            if re.search(r"\$|\bdollar|\bmoney|\bpay\b|\bowe", t, re.I): g["money"] += 1
+            for w_ in re.findall(r"(?<![.!?]\s)(?<!^)\b([A-Z][a-z]{2,})\b", t):
+                if w_ not in words and w_ not in COMMON_CAPS: g["odd"][w_] += 1
+    cost = collections.Counter(); fb = collections.Counter()
+    for c in calls:
+        if c.get("outside"): cost[c["model"].split("/")[0]] += c.get("usd", 0)
+        if c.get("fallback"): fb[c["model"].split("/")[0]] += 1
+    print(f"\nOUTSIDE MINDS ({len(om)} residents): per group, lines spoken, words per line, money talk, standards hits, capitalized words that match no resident (possible invented people or places; check by hand)")
+    for g, v in sorted(st.items()):
+        L = max(1, v["lines"])
+        print(f"  {g:9} {len(v['people']):2} speakers  {v['lines']:4} lines  {v['words'] / L:4.1f} w/line  money {v['money'] / L:.0%}  standards {v['std']}  odd names {sum(v['odd'].values())} ({sum(v['odd'].values()) / L:.2f}/line)"
+              + (f"  cost ${cost[g]:.2f}" if g in cost else "") + (f"  FALLBACKS {fb[g]}" if fb[g] else ""))
+        if v["odd"]: print("            " + ", ".join(f"{k} {c}" for k, c in v["odd"].most_common(8)))
 
 
 # 1950 US vital statistics (per 1,000 people a year): births 24.1, deaths 9.6, marriages 11.1 (marriages counted per person).

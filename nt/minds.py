@@ -268,14 +268,14 @@ class LiveMind:
 
     def plan(self, w, p, memories, extra="", new=()):
         msg = situation_block(w, p, memories, extra, new=new) + "\n\n" + PLAN_FORMAT
-        out, raw = self.llm.call_json("resident", self.system(w, p), [{"role": "user", "content": msg}], max_tokens=900)
+        out, raw = self.llm.call_json("resident", self.system(w, p), [{"role": "user", "content": msg}], max_tokens=900, mind=p.get("model"))
         return out or {"slots": [], "thoughts": [], "feelings": {}, "_raw": raw[:200]}
 
     def reflect(self, w, p, week):
         """Sunday: the resident looks back on their own week, in their own words (Generative Agents-style reflection). We supply no topics."""
         lines = "\n".join(f"- {m['text']}" for m in week[-40:]) or "- (a quiet week)"
         msg = (f"{today_block(w, p)}\nIt's Sunday. What you remember of this past week:\n{lines}\n\n" + REFLECT_FORMAT)
-        out, raw = self.llm.call_json("resident", self.system(w, p), [{"role": "user", "content": msg}], max_tokens=400)
+        out, raw = self.llm.call_json("resident", self.system(w, p), [{"role": "user", "content": msg}], max_tokens=400, mind=p.get("model"))
         return [str(x)[:300] for x in ((out or {}).get("reflections") or [])][:3]
 
     def say(self, w, p, other, transcript, memories, purpose, mind_seed=None, chance=False, last=None):
@@ -292,7 +292,7 @@ class LiveMind:
         money = f"Household money: ${int(h['savings'])} saved, ${int(h['debt'])} owed.\n" if exact else ""
         content = [{"type": "text", "text": situation_block(w, p, memories, ""), "cache_control": {"type": "ephemeral"}},
                    {"type": "text", "text": f"{money}\n{lead}\nConversation so far:\n{hist}\n\n" + SAY_FORMAT}]
-        out, raw = self.llm.call_json("talk", self.system(w, p), [{"role": "user", "content": content}], max_tokens=300, cache_system=False)
+        out, raw = self.llm.call_json("talk", self.system(w, p), [{"role": "user", "content": content}], max_tokens=300, cache_system=False, mind=p.get("model"))
         return out or {"say": "...", "end": True, "deal": None}
 
 
@@ -345,3 +345,17 @@ class MockMind:
         n = len(transcript)
         return {"say": f"[MOCK line {n + 1}] {p['name'].split()[0]} talks to {other['name'].split()[0]}.", "aside": f"[MOCK] {p['name'].split()[0]} privately thinks something.", "end": n >= self.r.randint(2, 5),
                 "deal": ({"type": "lend", "amount": 20, "terms": "[MOCK]"} if n == 2 and self.r.random() < 0.1 else None)}
+
+
+def assign_outside_minds(w, seed, per_model=3, models=None):
+    """Dice give a few adult residents (18+) a mind from another lab, for life. A separate dice stream, so the town itself
+    rolls exactly as before. Children stay on Claude (channel standards). Returns {pid: model}. Nobody in town knows."""
+    import random
+    from .llm import OUTSIDE
+    models = list((models or OUTSIDE).values())
+    pool = sorted((pid for pid, p in w.people.items() if p["alive"] and p["age"] >= 18), key=str)
+    r = random.Random(f"{seed}-outside-minds"); picked = r.sample(pool, min(len(pool), per_model * len(models)))
+    out = {}
+    for i, pid in enumerate(picked):
+        w.people[pid]["model"] = models[i % len(models)]; out[pid] = w.people[pid]["model"]
+    return out

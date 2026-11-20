@@ -4,6 +4,13 @@ import json, os, time, threading, urllib.request, urllib.error
 
 KEY_PATH = os.path.expanduser("~/.secrets/anthropic_key")
 API = "https://api.anthropic.com/v1/messages"
+# Outside minds (Nov 20, Aaron's idea): a few residents think with another lab's model, through OpenRouter (one key, one domain).
+# A resident's model is fixed for life. Only their own plans, reflections and words go to it; the referee, world step,
+# clerk and editor stay on Claude. OpenRouter reports each call's real cost, so the budget cap covers these too.
+OR_KEY_PATH = os.path.expanduser("~/.secrets/openrouter_key")
+OR_API = "https://openrouter.ai/api/v1/chat/completions"
+OUTSIDE = {"gpt": "openai/gpt-6.2-sol", "gemini": "google/gemini-4-carbon", "deepseek": "deepseek/deepseek-v4.1-flash-1017"}
+OR_REASON = {}  # model -> the reasoning setting it accepts (some can't turn thinking off; then the least, hidden)
 NO_THINK = {"resident", "talk", "referee", "referee_big", "world", "world_big", "law"}
 THINK_OFF = {}  # model -> the thinking type that turns thinking off (learned from the API)
 MODELS = {"resident": "claude-haiku-5-5", "talk": "claude-sonnet-5-5",  # conversations: Sonnet (chosen Nov 17 after the Haiku vs Sonnet A/B test)
@@ -36,6 +43,15 @@ class Meter:
                 self.tokens[k] += usage.get(uk, 0)
         return cost
 
+    def add_cost(self, role, model, cost, usage):
+        """For outside models: OpenRouter reports the real price of each call."""
+        with self.lock:
+            self.spent += cost; self.calls += 1
+            for key in (role, f"{role}@{model.split('/')[0]}"):
+                r = self.by_role.setdefault(key, {"calls": 0, "usd": 0.0}); r["calls"] += 1; r["usd"] += cost
+            self.tokens["in"] += usage.get("input_tokens", 0); self.tokens["out"] += usage.get("output_tokens", 0)
+        return cost
+
     def check(self):
         if self.spent >= self.budget: raise BudgetExceeded(f"spent ${self.spent:.2f} of ${self.budget:.2f} cap")
 
@@ -46,11 +62,17 @@ class LLM:
     def __init__(self, mode="mock", budget_usd=20.0, log_path=None):
         self.mode = mode; self.meter = Meter(budget_usd); self.log_path = log_path; self._log_lock = threading.Lock()
         self.key = open(KEY_PATH).read().strip() if mode == "live" else None
+        self.or_key = open(OR_KEY_PATH).read().strip() if mode == "live" and os.path.exists(OR_KEY_PATH) else None
 
-    def call(self, role, system, messages, max_tokens=600, cache_system=True, temperature=1.0):
-        """system: list of text blocks (stable prefix first, so it caches). Returns (text, usage)."""
+    def call(self, role, system, messages, max_tokens=600, cache_system=True, temperature=1.0, mind=None):
+        """system: list of text blocks (stable prefix first, so it caches). Returns (text, usage).
+        mind: an outside model id (OpenRouter) for a resident who thinks with another lab's model; None = Claude."""
         if self.mode != "live": raise MockModeError("API call attempted in mock mode")
         self.meter.check()
+        if mind:
+            try: return self._call_outside(role, mind, system, messages, max_tokens, temperature)
+            except Exception as ex:  # an outage must not stop the town: this one call goes to Claude, and the log says so (the audit counts these)
+                self._log({"role": role, "model": mind, "fallback": True, "error": str(ex)[:200]})
         model = MODELS[role]
         sys_blocks = [{"type": "text", "text": s} for s in system]
         if cache_system and sys_blocks: sys_blocks[-1]["cache_control"] = {"type": "ephemeral"}
@@ -78,6 +100,34 @@ class LLM:
                 if attempt < 5: time.sleep(2 ** attempt + 1); continue
                 raise
         raise RuntimeError("API retries exhausted")
+
+    def _call_outside(self, role, model, system, messages, max_tokens, temperature):
+        if not self.or_key: raise RuntimeError("no OpenRouter key")
+        flat = lambda c: c if isinstance(c, str) else "\n".join(b.get("text", "") for b in c)
+        msgs = [{"role": "system", "content": "\n\n".join(system)}] + [{"role": m["role"], "content": flat(m["content"])} for m in messages]
+        body = {"model": model, "messages": msgs, "max_tokens": max_tokens, "temperature": temperature, "usage": {"include": True},
+                "reasoning": OR_REASON.get(model, {"enabled": False})}
+        for attempt in range(5):
+            req = urllib.request.Request(OR_API, data=json.dumps(body).encode(), headers={"Authorization": f"Bearer {self.or_key}", "Content-Type": "application/json", "X-Title": "Nobody's Town"})
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp: out = json.loads(resp.read())
+                if out.get("error"): raise RuntimeError(str(out["error"])[:200])
+                text = (out["choices"][0]["message"].get("content") or "")
+                u = out.get("usage", {}) or {}
+                usage = {"input_tokens": u.get("prompt_tokens", 0), "output_tokens": u.get("completion_tokens", 0)}
+                cost = self.meter.add_cost(role, model, float(u.get("cost") or 0.0), usage)
+                self._log({"role": role, "model": model, "usage": usage, "usd": round(cost, 6), "outside": True})
+                return text, usage
+            except urllib.error.HTTPError as e:
+                msg = e.read().decode(errors="replace")[:300]
+                if e.code == 400 and "mandatory" in msg and body["reasoning"].get("enabled") is False:
+                    OR_REASON[model] = body["reasoning"] = {"effort": "minimal", "exclude": True}; continue
+                if e.code in (408, 429, 500, 502, 503, 529) and attempt < 4: time.sleep(2 ** attempt + 1); continue
+                raise RuntimeError(f"OpenRouter {e.code}: {msg}")
+            except (urllib.error.URLError, TimeoutError, KeyError, IndexError):
+                if attempt < 4: time.sleep(2 ** attempt + 1); continue
+                raise
+        raise RuntimeError("OpenRouter retries exhausted")
 
     def call_json(self, role, system, messages, max_tokens=600, **kw):
         text, usage = self.call(role, system, messages, max_tokens, **kw)
