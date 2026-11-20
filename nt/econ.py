@@ -521,9 +521,10 @@ def county_bank(e, p, amount, purpose):
     w = e.w; h = w.households[p["household"]]; kind = classify(purpose)
     inc = income_m(h); owed = payments(w, h); nm = "the bank in the county seat"
     def no(why):
-        w.minds_memory[p["id"]].add(w.day, w.slot, f"I asked {nm} for a loan of {money(amount)} ({purpose[:80]}). They turned me down: {why}.")
-        e.ev("loan_refused", actors=[p["id"]], text=f"{nm.capitalize()} turns down {p['name']}'s request for a {money(amount)} loan ({kind}): {why}.", importance=5)
-        return f"asked the county bank for {money(amount)}: turned down"
+        amt = money(amount) if amount else "an unstated amount"  # fix 1: refusal text crashed on money(None)
+        w.minds_memory[p["id"]].add(w.day, w.slot, f"I asked {nm} for a loan of {amt} ({(purpose or '')[:80]}). They turned me down: {why}.")
+        e.ev("loan_refused", actors=[p["id"]], text=f"{nm.capitalize()} turns down {p['name']}'s request for a loan of {amt} ({kind}): {why}.", importance=5)
+        return f"asked the county bank for {amt}: turned down"
     if not amount or amount <= 0: return no("they need to know how much")
     if p["age"] < 21: return no("you have to be 21 to sign a note")
     if h["credit"].get("bad_until") and h["credit"]["bad_until"] > w.date_str: return no("they know about the repossession or foreclosure on our record")

@@ -1,6 +1,7 @@
 """Nobody's Town control script.
   python3 -m nt.golive ping                       one tiny API call: key + credits OK?
   python3 -m nt.golive smoke                      live 2-day test on a TEST town, $1 cap; prints real cost + sample dialogue
+  python3 -m nt.golive fix "<reason>" --base DIR   record a post-lock mechanical fix (diff vs DIR) in fixes.json + CHANGELOG.md
   python3 -m nt.golive roll                       ONE-TIME official town roll (true randomness) + fingerprint. Refuses if one exists.
   python3 -m nt.golive season <n> [--budget 15]   run the next season (episode n) of the OFFICIAL town, live, continuing the saved state
   python3 -m nt.golive episode <n>                editor (live) + render + voice scripts by role + subtitles + thumbnail
@@ -16,12 +17,75 @@ SEASON_DAYS = 365  # about one year per episode (smoke-test estimate only; real 
 RULE_FILES = ("generator.py", "world.py", "history.py", "minds.py", "referee.py", "engine.py", "fate.py", "llm.py", "names.py", "econ.py", "law.py", "routine.py")  # econ + law + routine added Nov 18
 
 
-def settings_fingerprint():
+def settings_fingerprint(here=None):
     """Hash of every rule file (RULE_FILES). Published at launch."""
-    here = os.path.dirname(__file__); h = hashlib.sha256()
+    here = here or os.path.dirname(__file__); h = hashlib.sha256()
     for f in RULE_FILES:
         h.update(open(os.path.join(here, f), "rb").read())
     return h.hexdigest()
+
+
+# ---- Post-lock mechanical fixes (approved by Aaron, Nov 20 2026) ----
+# A fix may only stop a crash or a mechanical failure; it must not change what can happen in town.
+# Each fix is recorded with its reason, the town day, the exact diff and old -> new fingerprint, in
+# OFFICIAL/fixes.json and the public OFFICIAL/CHANGELOG.md. `season` runs only if the chain is unbroken
+# from the roll fingerprint to the code on disk.
+def fixes_path(): return os.path.join(OFFICIAL, "fixes.json")
+
+
+def load_fixes():
+    p = fixes_path(); return json.load(open(p)) if os.path.exists(p) else []
+
+
+def chain_ok(gen, current=None):
+    """True if the code on disk is the roll fingerprint or the end of an unbroken fix chain from it."""
+    current = current or settings_fingerprint(); head = gen.get("settings_fingerprint")
+    for i, f in enumerate(load_fixes()):
+        if f["n"] != i + 1 or f["old_fingerprint"] != head: return False, f"fix chain broken at fix {i + 1}"
+        if hashlib.sha256(f["diff"].encode()).hexdigest() != f["diff_sha256"]: return False, f"fix {i + 1} diff was altered"
+        head = f["new_fingerprint"]
+    return (current == head), ("ok" if current == head else "rule files changed outside the fix log")
+
+
+def write_changelog(fixes, gen):
+    L = ["# Nobody's Town: rule changelog", "",
+         "The rules were locked at the roll. After that, only mechanical fixes are allowed: a fix may stop a crash",
+         "or a mechanical failure, and must not change what can happen in town. Every fix is listed here with its",
+         "exact diff and the fingerprint chain, so anyone can check it.", "",
+         f"- Roll settings fingerprint: `{gen.get('settings_fingerprint')}`", ""]
+    for f in fixes:
+        L += [f"## Fix {f['n']}: {f['reason']}", "",
+              f"- Town day {f['town_day']} ({f['town_date']}); recorded {f['recorded']}",
+              f"- Files: {', '.join(f['files'])}",
+              f"- Fingerprint: `{f['old_fingerprint']}` -> `{f['new_fingerprint']}`",
+              f"- Diff sha256: `{f['diff_sha256']}`", "", "```diff", f["diff"].rstrip(), "```", ""]
+    open(os.path.join(OFFICIAL, "CHANGELOG.md"), "w").write("\n".join(L))
+
+
+def cmd_fix(reason, base):
+    """Record a mechanical fix: `golive fix "<reason>" --base <dir with the currently-locked rule files>`."""
+    import difflib, datetime as dt
+    gen = json.load(open(os.path.join(OFFICIAL, "world.json"))); fixes = load_fixes()
+    head = fixes[-1]["new_fingerprint"] if fixes else gen["settings_fingerprint"]
+    ok, why = chain_ok(gen, head)
+    if not ok: sys.exit(f"Refusing: existing chain is not valid ({why}).")
+    if settings_fingerprint(base) != head: sys.exit("Refusing: --base is not the currently locked code (fingerprint mismatch).")
+    if not reason.strip(): sys.exit("A reason is required.")
+    here = os.path.dirname(__file__); diff = ""; files = []
+    for f in RULE_FILES:
+        a = open(os.path.join(base, f)).readlines(); b = open(os.path.join(here, f)).readlines()
+        d = "".join(difflib.unified_diff(a, b, f"a/nt/{f}", f"b/nt/{f}"))
+        if d: diff += d; files.append(f)
+    if not diff: sys.exit("No rule-file changes to record.")
+    st = os.path.join(OFFICIAL, "state.pkl"); day, date = None, None
+    if os.path.exists(st):
+        e = pickle.load(open(st, "rb")); day, date = e.w.day, e.w.date_str
+    fixes.append({"n": len(fixes) + 1, "reason": reason, "town_day": day, "town_date": date, "files": files,
+                  "recorded": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+                  "old_fingerprint": head, "new_fingerprint": settings_fingerprint(), "diff": diff,
+                  "diff_sha256": hashlib.sha256(diff.encode()).hexdigest()})
+    json.dump(fixes, open(fixes_path(), "w"), indent=1); write_changelog(fixes, gen)
+    print(f"recorded fix {len(fixes)}: {head[:12]} -> {fixes[-1]['new_fingerprint'][:12]} ({', '.join(files)})")
 
 
 def cmd_ping():
@@ -73,7 +137,8 @@ def cmd_season(n, budget, minutes=None):
     from .engine import Engine
     from .llm import BudgetExceeded
     gen = json.load(open(os.path.join(OFFICIAL, "world.json")))
-    if gen.get("settings_fingerprint") != settings_fingerprint(): sys.exit("Rule files changed since the official roll. Refusing to run (that would be steering).")
+    ok, why = chain_ok(gen)
+    if not ok: sys.exit(f"Rule files changed since the official roll ({why}). Refusing to run (that would be steering).")
     state = os.path.join(OFFICIAL, "state.pkl"); out = os.path.join(OFFICIAL, "run"); os.makedirs(out, exist_ok=True)
     if os.path.exists(state):
         e = pickle.load(open(state, "rb")); trim_unsaved(out, e.w.day)
@@ -139,3 +204,4 @@ if __name__ == "__main__":
     {"ping": cmd_ping, "smoke": cmd_smoke, "roll": cmd_roll}.get(a[0], lambda: None)()
     if a[0] == "season": cmd_season(int(a[1]), budget, float(a[a.index("--minutes") + 1]) if "--minutes" in a else None)
     if a[0] == "episode": cmd_episode(int(a[1]))
+    if a[0] == "fix": cmd_fix(a[1], a[a.index("--base") + 1])
