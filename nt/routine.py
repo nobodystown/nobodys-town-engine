@@ -8,7 +8,7 @@ the referee is left for what is genuinely new or uncertain. Anything that doesn'
 Also here: the town FACT SHEET the referee and the world step see on every call (offices and when the council meets, who runs
 and works at each business, the lawman, the church), so they have nothing to guess at.
 """
-import re
+import random, re
 from . import history, econ
 
 HARD = re.compile(r"\b(steal|break|burn|threaten|fight|hit|bribe|hide|search|follow|spy|sneak|forge|poison)\b", re.I)
@@ -141,6 +141,31 @@ def run(e, p, do, detail, amt, kind):
     return None
 
 
+def county_doctor(w):
+    """Fix 2 (Nov 20): the town had no doctor in its data, so models invented different ones (Dr. Whitfield, Dr. Lowry, "Doc").
+    A doctor who lives in town is used if there is one; otherwise one county-seat doctor, rolled once from the town's own seed on
+    a separate dice stream (so the town itself rolls the same), never sharing a first name or surname with anyone in town."""
+    here = [q for q in w.living() if re.search(r"\bdoctor\b|physician", q.get("job") or "", re.I)]
+    if here: return {"name": "Dr. " + here[0]["name"], "male": here[0]["sex"] == "male" if "sex" in here[0] else True, "in_town": True}
+    d = w.town.get("county_doctor")
+    if d: return d
+    from .names import baby_name
+    from .generator import SURNAMES
+    r = random.Random(f"{w.gen['seed']}-county-doctor")
+    taken_first = {q["name"].split()[0] for q in w.people.values()}; taken_sur = {q["name"].split()[-1] for q in w.people.values()}
+    male = r.random() < 0.94; age = r.randint(34, 66)
+    first = baby_name(r, w.gen["start"]["year"] - age, male, taken_first)
+    sur = r.choice([x for x in SURNAMES if x not in taken_sur and x != first])
+    d = {"name": f"Dr. {first} {sur}", "male": male, "in_town": False}; w.town["county_doctor"] = d
+    return d
+
+
+def doctor_line(w):
+    d = county_doctor(w); he = "he" if d["male"] else "she"
+    if d.get("in_town"): return f"The town doctor is {d['name']}."
+    return f"No doctor lives in town; the doctor people here use is {d['name']} in the county seat, reached by telephone ({he} makes house calls)."
+
+
 def fact_sheet(w):
     """What anyone in town knows as plain fact. Shown to the referee and the world step on every call."""
     t = w.town; off = t["offices"]; nm = lambda i: w.people[i]["name"] if i and i in w.people else None
@@ -159,5 +184,6 @@ def fact_sheet(w):
     law = [q["name"] + f" ({q['job']})" for q in w.living() if any(x in (q.get("job") or "") for x in ("marshal", "sheriff"))]
     lines.append(f"THE LAW: {', '.join(law) or 'none in town; the county sheriff, from the county seat'}.")
     clergy = [q["name"] for q in w.living() if re.search(r"preacher|minister|pastor|priest|reverend", q.get("job") or "", re.I)]
+    lines.append("DOCTOR: " + doctor_line(w))
     lines.append("CHURCH: the church holds services Sunday mornings; " + (f"church people in town: {', '.join(clergy)}." if clergy else "no minister lives in town."))
     return "\n".join(lines)

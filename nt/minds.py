@@ -209,6 +209,10 @@ def today_block(w, p):
     if pl.get("burned"): notes.append(f"Your house burned down. Rebuilding would cost about ${int(h.get('repairs_needed', 0))}.")
     elif h.get("repairs_needed", 0) > 0 and pl.get("condition", 1) < 0.95: notes.append(f"Your house is damaged; fixing it would cost about ${int(h['repairs_needed'])}.")
     if p["pregnant"] and w.day - p["pregnant"]["start"] >= 60: notes.append("You're expecting a baby.")
+    sick = [q for q in [p] + [w.people[i] for i in h["members"] if i != p["id"]] if q["alive"] and (q.get("illness") or q.get("injury"))]
+    if sick:  # fix 2: someone at home is sick or hurt, so you'd know who the doctor is
+        from .routine import doctor_line
+        notes.append(doctor_line(w))
     if p.get("items"): notes.append("You have: " + "; ".join(it["desc"] for it in p["items"]) + ".")
     if p["age"] < 18 and w.date.weekday() < 5 and p["education"] == "in school": notes.append("It's a school day.")
     for e in t["elections"]:

@@ -9,7 +9,7 @@ what could realistically happen next, with odds ("nothing new yet" always on the
 resolved, given up, gone cold, or gone (everyone involved dead or away). Nothing goes quiet without an ending in the record.
 The model never decides a resident's choices; residents act on threads themselves, and what they did is shown to the step.
 """
-import json, random
+import json, random, re
 from . import law as L, econ, routine
 
 # (category, unit, yearly rate per unit, season weights or None, source)
@@ -46,6 +46,7 @@ for this exact town, date, season and these exact people, each with your honest 
 - Use exact full names from the list. Never decide what a resident chooses, says or feels; only what happens to them and around them.
 - If it leaves something unsettled that will play out over time (a crime, a stranger who stays, a debt, an injury, a show in town, a quarrel), open a thread.
 - If it is an event people could go to (a show, a social, a game, a revival), give it a place with hours, days and price.
+- If money changes hands or goes missing (stolen, lost, found, paid, docked, won), that option must carry a money operation with the exact amount.
 """ + STANDARDS + """
 OUTPUT one JSON object:
 {"options": [ {"odds": <percent>,
@@ -71,6 +72,7 @@ how often it would go that way in real life (percent, summing to 100). The town'
 - Real matters end. An option may end it: "resolved" (settled one way or another), "given_up" (people let it go), "cold" (no answer, and none coming),
   but only when that is realistic now. Long-quiet matters do go cold.
 - If someone is caught, the law follows period procedure: questioning, the county court, a fine, jail time or release.
+- If money changes hands or goes missing (stolen, lost, found, paid, docked, won), that option must carry a money operation with the exact amount.
 """ + STANDARDS + """
 OUTPUT one JSON object:
 {"options": [ {"odds": <percent>, "record": "<what happens, 1-2 plain sentences; for 'nothing new yet' say so>",
@@ -78,6 +80,37 @@ OUTPUT one JSON object:
    "said": "<how word gets around, if it does>", "importance": 1-10, "effects": [<same operations as before>],
    "end": null|"resolved"|"given_up"|"cold", "truth_update": "<new private facts, if any>"} ]}
 Operations: money, memory, relationship, injure, item, fire, jail, newcomer (same shapes as the world step)."""
+
+
+# Fix 3 (Nov 20): a record that says money moved must move money. At the Q1 midpoint the Duvals' savings "went missing" in the
+# record but no money operation came with it, so their books never changed and nobody knew how much was gone.
+MONEY_NOUN = re.compile(r"\$\s?\d|\bdollars?\b|\bmoney\b|\bsavings\b|\bcash\b|\bpay envelope\b|\bwages?\b|\bpaycheck\b", re.I)
+MONEY_VERB = re.compile(r"\b(stole|stolen|steals?|took|taken|takes|missing|gone|lost|loses|found|finds|paid|pays|spent|spends|docked|short|won|wins|gave|gives|lent|lends|borrowed|owes?d?|cost|costs|fined)\b", re.I)
+
+
+def money_unbacked(o):
+    """True if an option's record says money changed hands but it carries no money operation."""
+    if any(isinstance(x, dict) and x.get("op") == "money" and x.get("amount") for x in (o.get("effects") or [])): return False
+    rec = str(o.get("record") or o.get("text") or "")
+    if "nothing new" in rec.lower(): return False
+    return bool(MONEY_NOUN.search(rec) and MONEY_VERB.search(rec))
+
+
+def ask_options(llm, role, system, msg, max_tokens):
+    """Ask for the options; if any says money moved without a money operation, ask once more to fix just that. Then the dice roll as before."""
+    out, raw = llm.call_json(role, system, [{"role": "user", "content": msg}], max_tokens=max_tokens)
+    opts = (out or {}).get("options") or []
+    bad = [i + 1 for i, o in enumerate(opts) if isinstance(o, dict) and money_unbacked(o)]
+    if not bad: return out, raw
+    note = (f"Option{'s' if len(bad) > 1 else ''} {', '.join(map(str, bad))} say{'' if len(bad) > 1 else 's'} money changed hands or went missing but carr{'y' if len(bad) > 1 else 'ies'} no money operation. "
+            "Return the same JSON with the same options and odds, adding a money operation with the exact amount to each of those options "
+            "(or, if no money actually changes hands, rewording the record to say so). Change nothing else.")
+    out2, raw2 = llm.call_json(role, system, [{"role": "user", "content": msg}, {"role": "assistant", "content": raw}, {"role": "user", "content": note}], max_tokens=max_tokens)
+    opts2 = (out2 or {}).get("options") or []
+    if len(opts2) != len(opts): return out, raw
+    for a, b in zip(opts, opts2):  # the odds stay exactly as first estimated; only the money operations are filled in
+        if isinstance(a, dict) and isinstance(b, dict): b["odds"] = a.get("odds")
+    return out2, raw2
 
 
 def roll(r, opts):
@@ -152,7 +185,7 @@ class Fate:
         if self.e.mode != "live": out = self.mock_options(cat, u)
         else:
             msg = self.base_ctx() + "\n" + self.unit_text(cat, u)
-            out, raw = self.e.llm.call_json("world_big" if cat in BIG else "world", [FATE_RULES], [{"role": "user", "content": msg}], max_tokens=2200)
+            out, raw = ask_options(self.e.llm, "world_big" if cat in BIG else "world", [FATE_RULES], msg, 2200)
         ch, odds, d = roll(self.r, (out or {}).get("options") or [])
         if not ch: return
         self.apply(ch, ev, cat, odds, d, (out or {}).get("options") or [])
@@ -256,7 +289,7 @@ class Fate:
                        f"SO FAR:\n" + "\n".join("- " + hline for hline in th["history"][-10:]) + "\n"
                        + (f"WHAT THE PEOPLE INVOLVED DID LATELY:\n" + "\n".join("- " + x for x in lately) + "\n" if lately else "WHAT THE PEOPLE INVOLVED DID LATELY: nothing about this.\n")
                        + (f"AT {pl['name'].upper()} TODAY: {', '.join(there) or 'nobody from town went'}.\n" if there is not None and pl else ""))
-                out, raw = self.e.llm.call_json("world_big" if th["kind"] in BIG else "world", [THREAD_RULES.replace("{span}", span)], [{"role": "user", "content": msg}], max_tokens=1800)
+                out, raw = ask_options(self.e.llm, "world_big" if th["kind"] in BIG else "world", [THREAD_RULES.replace("{span}", span)], msg, 1800)
             th["last_step"] = w.day
             ch, odds, d = roll(self.r, (out or {}).get("options") or [])
             if not ch: continue
