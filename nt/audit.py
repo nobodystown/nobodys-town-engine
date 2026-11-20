@@ -125,6 +125,7 @@ If It It's That's There This We You He She They Don't Can't Won't Maybe Well Loo
 def outside_minds(run, dl, calls, names):
     """Residents with a mind from another lab (outside_minds.json) next to the Claude residents: how they talk, what they invent."""
     path = os.path.join(run, "outside_minds.json")
+    if not os.path.exists(path): path = os.path.join(os.path.dirname(os.path.abspath(run)), "outside_minds.json")  # official town keeps it next to run/
     if not os.path.exists(path): return
     om = json.load(open(path)); group = lambda name: om.get(name, "claude").split("/")[0]
     words = set()
