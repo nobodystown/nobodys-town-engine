@@ -48,7 +48,7 @@ def cmd_roll():
     seed = random.SystemRandom().randrange(10 ** 12)
     gen = generate(seed); gen["fingerprint"] = fingerprint(seed); gen["settings_fingerprint"] = settings_fingerprint()
     json.dump(gen, open(os.path.join(OFFICIAL, "world.json"), "w"), indent=1)
-    proof = {"seed": seed, "generator": VERSION, "world_fingerprint": gen["fingerprint"], "settings_fingerprint": gen["settings_fingerprint"], "rule_files": list(RULE_FILES)}
+    proof = {"seed": seed, "generator": VERSION, "world_fingerprint": gen["fingerprint"], "settings_fingerprint": gen["settings_fingerprint"], "rule_files": list(RULE_FILES), "outside_minds": "about 17.5% of adults (minds.OUTSIDE_SHARE), split DeepSeek 50 / GPT 25 / Gemini 25, dice stream '<seed>-outside-minds'"}
     json.dump(proof, open(os.path.join(OFFICIAL, "PROOF.json"), "w"), indent=1)
     print(f"OFFICIAL TOWN: {gen['name']} — {gen['geography']}, {gen['region']}, {gen['start']['season']} {gen['start']['year']}, population {gen['population']}")
     print(json.dumps(proof, indent=1))
@@ -65,7 +65,12 @@ def cmd_season(n, budget, minutes=None):
     state = os.path.join(OFFICIAL, "state.pkl"); out = os.path.join(OFFICIAL, "run"); os.makedirs(out, exist_ok=True)
     if os.path.exists(state):
         e = pickle.load(open(state, "rb")); e.reopen(out, LLM("live", budget, os.path.join(out, "api_calls.jsonl")))
-    else: e = Engine(gen, out, "live", budget, workers=8)
+    else:
+        e = Engine(gen, out, "live", budget, workers=8)
+        from .minds import assign_outside_share
+        got = assign_outside_share(e.w, gen["seed"])  # private record: never published, never in snapshots
+        json.dump({e.w.people[k]["name"]: m for k, m in got.items()}, open(os.path.join(OFFICIAL, "outside_minds.json"), "w"), indent=1)
+        print(f"outside minds: {len(got)} of {sum(1 for p in e.w.people.values() if p['alive'] and p['age'] >= 18)} adults", flush=True)
     e.compress = True
     from . import history
     year = gen["start"]["year"] + n - 1  # episode n is one calendar year (episode 1 = 1950)

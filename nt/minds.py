@@ -360,3 +360,26 @@ def assign_outside_minds(w, seed, per_model=3, models=None):
     for i, pid in enumerate(picked):
         w.people[pid]["model"] = models[i % len(models)]; out[pid] = w.people[pid]["model"]
     return out
+
+
+# The official roll (agreed with Aaron Nov 20): about 15-20% of adults get an outside mind, weighted toward DeepSeek.
+OUTSIDE_SHARE = 0.175
+OUTSIDE_WEIGHTS = {"deepseek": 0.5, "gpt": 0.25, "gemini": 0.25}
+
+
+def assign_outside_share(w, seed, share=OUTSIDE_SHARE, weights=OUTSIDE_WEIGHTS):
+    """Same dice stream as assign_outside_minds, but sized by share of adults and split by weight.
+    Largest-remainder split so the counts always add up. Returns {pid: model}."""
+    import random
+    from .llm import OUTSIDE
+    pool = sorted((pid for pid, p in w.people.items() if p["alive"] and p["age"] >= 18), key=str)
+    total = max(1, round(share * len(pool)))
+    raw = {k: total * v for k, v in weights.items()}
+    n = {k: int(x) for k, x in raw.items()}
+    for k in sorted(raw, key=lambda k: raw[k] - n[k], reverse=True)[: total - sum(n.values())]: n[k] += 1
+    r = random.Random(f"{seed}-outside-minds"); picked = r.sample(pool, min(len(pool), total))
+    order = [OUTSIDE[k] for k in weights for _ in range(n[k])]
+    out = {}
+    for pid, m in zip(picked, order):
+        w.people[pid]["model"] = m; out[pid] = m
+    return out
