@@ -1,0 +1,21 @@
+{
+ "seed": 798495408837,
+ "generator": "gen-0.8",
+ "world_fingerprint": "8c5c67de1c6ae6b021f4cd511980d204fef9aac0a1343ae351ed8c6b4984e847",
+ "settings_fingerprint": "ea836d0f3b6d8de2ccf6d548bf2211cd6e5021a3fa52fda37c19ade61687eced",
+ "rule_files": [
+  "generator.py",
+  "world.py",
+  "history.py",
+  "minds.py",
+  "referee.py",
+  "engine.py",
+  "fate.py",
+  "llm.py",
+  "names.py",
+  "econ.py",
+  "law.py",
+  "routine.py"
+ ],
+ "outside_minds": "about 17.5% of adults (minds.OUTSIDE_SHARE), split DeepSeek 50 / GPT 25 / Gemini 25, dice stream '<seed>-outside-minds'"
+}
