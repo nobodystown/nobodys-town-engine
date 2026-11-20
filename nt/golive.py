@@ -54,6 +54,18 @@ def cmd_roll():
     print(json.dumps(proof, indent=1))
 
 
+def trim_unsaved(out, day):
+    """A run killed mid-day leaves that day's half-written records behind; the saved state replays the day from its start.
+    Drop records for days >= the saved day so a day is never logged twice. (api_calls.jsonl is kept: that money was spent.)"""
+    for f in ("events.jsonl", "dialogues.jsonl", "snapshots.jsonl"):
+        path = os.path.join(out, f)
+        if not os.path.exists(path): continue
+        rows = open(path).readlines(); keep = [l for l in rows if json.loads(l)["day"] < day]
+        if len(keep) != len(rows):
+            tmp = path + ".tmp"; open(tmp, "w").writelines(keep); os.replace(tmp, path)
+            print(f"trimmed {len(rows) - len(keep)} unsaved rows from {f} (day {day} replays)", flush=True)
+
+
 def cmd_season(n, budget, minutes=None):
     """Runs (or resumes) season n of the OFFICIAL town. Saves after EVERY day, so an interrupted run loses at most one day.
     --minutes M stops cleanly after about M minutes; run the same command again to continue."""
@@ -64,7 +76,8 @@ def cmd_season(n, budget, minutes=None):
     if gen.get("settings_fingerprint") != settings_fingerprint(): sys.exit("Rule files changed since the official roll. Refusing to run (that would be steering).")
     state = os.path.join(OFFICIAL, "state.pkl"); out = os.path.join(OFFICIAL, "run"); os.makedirs(out, exist_ok=True)
     if os.path.exists(state):
-        e = pickle.load(open(state, "rb")); e.reopen(out, LLM("live", budget, os.path.join(out, "api_calls.jsonl")))
+        e = pickle.load(open(state, "rb")); trim_unsaved(out, e.w.day)
+        e.reopen(out, LLM("live", budget, os.path.join(out, "api_calls.jsonl")))
     else:
         e = Engine(gen, out, "live", budget, workers=8)
         from .minds import assign_outside_share
