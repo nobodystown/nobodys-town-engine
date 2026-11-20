@@ -8,7 +8,7 @@ day() { python3 -c "import pickle;print(pickle.load(open('nobodys_town/OFFICIAL/
 while true; do
   D=$(day)
   if [ "$D" -ge "$END" ]; then echo "$(date +%H:%M) $L DONE at day $D total \$$TOTAL" >> $L.progress; break; fi
-  MIN=20; [ $((END - D)) -le 3 ] && MIN=0.1
+  MIN=20; [ $((END - D)) -le 12 ] && MIN=0.1
   timeout 1500 python3 -m nt.golive season 1 --budget 10 --minutes $MIN --workers 16 > $L.chunk 2>&1
   cat $L.chunk >> $L.full
   LAST=$(grep '^{' $L.chunk | tail -1)
