@@ -9,7 +9,8 @@ import datetime as dt
 from PIL import Image, ImageDraw, ImageFilter
 from .art import font, FB, FR, INK, CREAM, RED, TEAL, BUTTER, sh
 
-BOARD_W, BOARD_H = 214, 94          # about two-thirds of the old 312x138
+GLOBE_COL = 46                      # left column on the board for the snow globe (Nov 20)
+BOARD_W, BOARD_H = 214 + GLOBE_COL, 94          # about two-thirds of the old 312x138
 NEWS_H = 30                         # height of the news tab under the board
 NEWS_MAX_W = 620                    # the tab may run wider than the board so the line stays readable
 BOARD_XY = (20, 20)
@@ -48,6 +49,16 @@ def _fit(d, text, size, width, path=FB):
     return text, f
 
 
+_GLOBES = {}
+def _globe(month):
+    """The snow globe for the board's left column, in the season of the date on screen."""
+    season = "winter" if month in (12, 1, 2) else "spring" if month in (3, 4, 5) else "summer" if month in (6, 7, 8) else "autumn"
+    if season not in _GLOBES:
+        from .brandkit import watermark
+        _GLOBES[season] = watermark(40, season)
+    return _GLOBES[season]
+
+
 def town_board(st, town, delta=None, news=None):
     """delta: {'pop': +1, 'treasury': -40} for values that just changed.
     news: short text shown on a tab hanging from the board's bottom edge (wider than the board so it can be read), or None."""
@@ -71,17 +82,24 @@ def town_board(st, town, delta=None, news=None):
     name, fh = _fit(d, town.upper(), 12, W - 16); d.text(((W - d.textlength(name, font=fh)) / 2, 7), name, font=fh, fill=CREAM)
     # the date, with the year big: as the decades pass, the year is part of the story (Nov 18: the day count was dropped, it meant nothing to viewers)
     dd = dt.date.fromisoformat(st["date"]); md = dd.strftime("%B %d").replace(" 0", " ").upper(); yr = str(dd.year)
-    fy = font(FB, 17); d.text((W - pad - d.textlength(yr, font=fy), 21), yr, font=fy, fill=BUTTER); d.text((pad + 1, 25), md, font=font(FR, 12), fill=(230, 236, 230))
+    fy = font(FB, 17); d.text((W - pad - d.textlength(yr, font=fy), 21), yr, font=fy, fill=BUTTER); d.text((GLOBE_COL + pad + 1, 25), md, font=font(FR, 12), fill=(230, 236, 230))
     f_lab = font(FB, 9); fv = font(FB, 21)
     def cell(x, label, value, key):
         d.text((x, 42), label, font=f_lab, fill=(170, 210, 206))
-        hot = key in delta; d.text((x, 52), value, font=fv, fill=BUTTER if hot else CREAM)
+        hot = key in delta; fb = font(FB, 10); badge = ""
         if hot:
             v = delta[key]; badge = (f"+{v:,}" if v > 0 else f"{v:,}") if key == "pop" else (f"+${v:,}" if v > 0 else f"-${abs(v):,}")
-            fb = font(FB, 10); bx = x + d.textlength(value, font=fv) + 5; bw = d.textlength(badge, font=fb) + 8
+        room = W - 7 - x - ((d.textlength(badge, font=fb) + 13) if hot else 0)  # value + badge must stay inside the board
+        f = fv; sz = 21
+        while d.textlength(value, font=f) > room and sz > 12: sz -= 1; f = font(FB, sz)
+        d.text((x, 52 + (21 - sz) // 2), value, font=f, fill=BUTTER if hot else CREAM)
+        if hot:
+            bx = x + d.textlength(value, font=f) + 5; bw = d.textlength(badge, font=fb) + 8
             d.rounded_rectangle([bx, 58, bx + bw, 73], 6, fill=GREEN if v > 0 else RED, outline=INK, width=2); d.text((bx + 4, 59), badge, font=fb, fill=INK)
-    cell(pad + 1, "POPULATION", f"{st['pop']}", "pop")
-    cell(W // 2 + 4, "TREASURY", f"${st['treasury']:,}", "treasury")
+    gx = GLOBE_COL; g = _globe(dd.month)
+    im.alpha_composite(g, (pad - 2, 21 + (H - 21 - g.height) // 2))
+    cell(gx + pad + 1, "POPULATION", f"{st['pop']}", "pop")
+    cell(gx + 76, "TREASURY", f"${st['treasury']:,}", "treasury")
     return im
 
 

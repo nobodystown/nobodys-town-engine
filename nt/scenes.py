@@ -90,10 +90,13 @@ def precip(big, weather, t):
         else: d.line([(x, y), (x - 6, y + 22)], fill=(200, 210, 230, 110), width=2)
 
 
+LEAD_W = 380  # width of the edge-of-town stretch before the street, when the welcome sign is shown
+
+
 class StreetPan:
     """Side-scrolling pan down the street: a strip of house fronts the camera glides along (the scene transition).
     The strip is rendered once; each frame is a moving 1280-wide window, then vignetted."""
-    def __init__(self, snap, seed, hids, tod, weather, season, walkers=(), storefront=None, setting="home", gen=None, place=None):
+    def __init__(self, snap, seed, hids, tod, weather, season, walkers=(), storefront=None, setting="home", gen=None, place=None, sign_pop=None, town=None):
         """setting: home (the family's street), main (Main Street), works (the company), country (open land + landmark)."""
         from . import places
         hids = list(hids) or sorted(snap["households"], key=int)[:3]
@@ -112,12 +115,21 @@ class StreetPan:
         else:
             left = street(snap, seed, a, list(walkers), tod, weather, season, 0.0, storefront=storefront, vignette_on=False, precip_on=False)
             right = street(snap, seed, b, [], tod, weather, season, 0.0, vignette_on=False, precip_on=False, sun=False)
-        self.strip = Image.new("RGB", (OW * 2, OH)); self.strip.paste(left, (0, 0)); self.strip.paste(right, (OW, 0))
+        lead = None
+        if sign_pop is not None:  # the edge of town: open roadside with the welcome sign showing the town's real population (set dressing; residents never see it)
+            from .brandkit import sign
+            lead = street(snap, seed, [], [], tod, weather, season, 0.0, vignette_on=False, precip_on=False, sun=False).crop((0, 0, LEAD_W, OH))
+            sg = sign(240, sign_pop, town, glow=tod in ("evening", "night"))
+            lead.paste(sg, ((LEAD_W - sg.width) // 2 + 20, int(206 * OH / 270) + 12 - sg.height), sg)
+        lw = LEAD_W if lead else 0
+        self.strip = Image.new("RGB", (OW * 2 + lw, OH))
+        if lead: self.strip.paste(lead, (0, 0))
+        self.strip.paste(left, (lw, 0)); self.strip.paste(right, (OW + lw, 0)); self.travel = OW + lw
         self.weather = weather  # rain/snow is drawn live over the moving window
 
     def frame(self, u, t=0.0):
         """u in 0..1: how far along the pan; eased."""
-        e = u * u * (3 - 2 * u); x = int(e * OW)
+        e = u * u * (3 - 2 * u); x = int(e * self.travel)
         im = self.strip.crop((x, 0, x + OW, OH))
         if self.weather in ("rain", "storm", "snow"): precip(im, self.weather, t)
         return vignette(im)

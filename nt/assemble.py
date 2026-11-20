@@ -173,7 +173,7 @@ def build_timeline(plan, sn, gen, short=False, vo=None):
     # ---- welcome (Episode 1) or previously (later): a slow look at the town, then meet the lead(s)
     s0 = sn[0]
     if plan.get("welcome"):
-        T.add("pan", 4.0, plan["welcome"], snap=s0, board=overlays.board_state(s0), news=None, hids=all_h(s0)[:6], tod="morning", weather="clear", season=s0["season"], walkers=[], setting="main", place="diner")
+        T.add("pan", 4.0, plan["welcome"], snap=s0, board=overlays.board_state(s0), news=None, hids=all_h(s0)[:6], tod="morning", weather="clear", season=s0["season"], walkers=[], setting="main", place="diner", sign_pop=overlays.population(s0), sign_town=gen["name"])
     T.add("overview", 3.5, None, snap=s0, tod="morning", weather="clear", season=s0["season"])  # the whole town as the year begins
     by_name = {v["name"]: int(k) for k, v in sn[-1]["people"].items()}
     for l in plan.get("leads", []):
@@ -211,7 +211,7 @@ def build_timeline(plan, sn, gen, short=False, vo=None):
                 walkers = [(a, 90 + i * 80, 0, 1 if i % 2 == 0 else -1) for i, a in enumerate(e["actors"][:3]) if str(a) in s["people"] and s["people"][str(a)]["alive"]]
                 establishing(e["day"], e["slot"], hids, sc.get("narration") or overlays.news_text(e), walkers, place=e.get("place"))
     last = sn[-1]
-    if plan.get("closing"): T.add("pan", 4.0, plan["closing"], snap=last, board=None, news=None, hids=all_h(last)[:6], tod="evening", weather=last["weather"].get("sky", "clear"), season=last["season"], walkers=[])
+    if plan.get("closing"): T.add("pan", 4.0, plan["closing"], snap=last, board=None, news=None, hids=all_h(last)[:6], tod="evening", weather=last["weather"].get("sky", "clear"), season=last["season"], walkers=[], sign_pop=overlays.population(last), sign_town=gen["name"])
     step = max(1, len(sn) // 12); lapse = sn[::step][:13] + ([sn[-1]] if sn[::step][-1] is not sn[-1] else [])
     if not short:
         T.add("timelapse", 9.0, None, snaps=lapse, season=last["season"])  # the year in nine seconds: what changed, where
@@ -232,7 +232,7 @@ def _cached(sh, key, make):
     return _CACHE[k]
 def pan_for(sh, seed):
     key = id(sh)
-    if key not in _PANS: _PANS.clear(); _PANS[key] = scenes.StreetPan(sh["snap"], seed, sh["hids"], sh["tod"], sh["weather"], sh["season"], sh.get("walkers", ()), setting=sh.get("setting", "home"), gen=_GEN.get("g"), place=sh.get("place"))
+    if key not in _PANS: _PANS.clear(); _PANS[key] = scenes.StreetPan(sh["snap"], seed, sh["hids"], sh["tod"], sh["weather"], sh["season"], sh.get("walkers", ()), setting=sh.get("setting", "home"), gen=_GEN.get("g"), place=sh.get("place"), sign_pop=sh.get("sign_pop"), town=sh.get("sign_town"))
     return _PANS[key]
 
 
@@ -261,17 +261,19 @@ def render_scene(sh, t_local, seed, gen):
 
 
 _WM = {}
+WM_SIZE, WM_ALPHA = 56, 0.55  # corner globe: always on (survives clips and reposts), small and faint (Aaron, Nov 19)
 def _wm(season):
     if season not in _WM:
         from .brandkit import watermark
-        _WM[season] = watermark(72, season)
+        wm = watermark(WM_SIZE, season); a = wm.getchannel("A").point(lambda v: int(v * WM_ALPHA)); wm.putalpha(a)
+        _WM[season] = wm
     return _WM[season]
 
 
 def base_layer(sh, t_local, seed, gen):
     img = render_scene(sh, t_local, seed, gen)
     if sh["kind"] not in ("title", "endscreen"):  # seasonal globe watermark, top-right
-        wm = _wm(sh.get("_season", "winter")); img.paste(wm, (OW - wm.width - 16, 16), wm)
+        wm = _wm(sh.get("_season", "winter")); img.paste(wm, (OW - wm.width - 18, 18), wm)
     return img
 
 

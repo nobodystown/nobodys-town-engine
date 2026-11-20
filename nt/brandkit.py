@@ -17,9 +17,13 @@ def sign(w, pop="?", town=None, glow=True):
     R(8, 4, 87, 52, INK); R(10, 6, 85, 50, TEAL); R(12, 8, 83, 48, sh(TEAL, 0.9)); R(10, 6, 85, 13, RED)
     for x in range(14, 84, 6): R(x, 9, x, 9.8, BUTTER)
     f1 = F(SCRIPT, int(12 * s)); t = "Welcome to"; d.text(((w - d.textlength(t, font=f1)) / 2, 12.5 * s), t, font=f1, fill=CREAM)
-    f2 = F(COND, int(11.2 * s)); t = "NOBODY'S TOWN"; tw = d.textlength(t, font=f2)
+    t = "NOBODY'S TOWN"; sz = int(11.2 * s); f2 = F(COND, sz)
+    while d.textlength(t, font=f2) > 69 * s and sz > 8: sz -= 1; f2 = F(COND, sz)  # keep the wordmark inside the board (Nov 20: it ran past the edges)
+    tw = d.textlength(t, font=f2)
     d.text(((w - tw) / 2 + s, 25 * s + s), t, font=f2, fill=INK); d.text(((w - tw) / 2, 25 * s), t, font=f2, fill=CREAM)
-    f3 = F(COND, int(7.5 * s)); t = (town.upper() + "  ·  " if town else "") + f"POP. {pop}"; d.text(((w - d.textlength(t, font=f3)) / 2, 39.5 * s), t, font=f3, fill=BUTTER)
+    f3 = F(COND, int(7.5 * s)); t = (town.upper() + "  ·  " if town else "") + f"POP. {pop}"
+    while d.textlength(t, font=f3) > 69 * s and f3.size > 8: f3 = F(COND, f3.size - 1)  # long town names
+    d.text(((w - d.textlength(t, font=f3)) / 2, 39.5 * s), t, font=f3, fill=BUTTER)
     if glow:
         g = im.filter(ImageFilter.GaussianBlur(int(4 * s))); base = Image.new("RGBA", im.size, (0, 0, 0, 0))
         base.alpha_composite(Image.eval(g, lambda v: v // 3)); base.alpha_composite(im); im = base
