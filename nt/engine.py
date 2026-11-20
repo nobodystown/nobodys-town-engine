@@ -380,13 +380,22 @@ class Engine:
             self.ev("measure_proposed", actors=[p["id"]], text=f"{p['name']} proposes measure {mid}: \"{detail}\"", importance=6, public=True)
         elif do == "apply_job" and q and econ.shop_of(w, q) and not self.company_of(q):
             k = econ.shop_of(w, q); nm = "the diner" if k == "diner" else "the general store"
-            self.pending.setdefault(q["id"], []).append(f"{p['name']} has asked you for work at {nm}.")
+            self.pending.setdefault(q["id"], []).append(f"{p['name']} has asked you for work at {nm}. (Hire them, turn them down, or leave it: your call.)")
+            self._ask_job(p, q["id"], nm)
             self.ev("job_application", actors=[p["id"], q["id"]], text=f"{p['name']} asks {q['name']} for work at {nm}.", importance=4)
         elif do == "apply_job":
             co = self.company_of(q) if q else w.companies.get("co1")
             if co and p["id"] not in co["employees"]:
-                self.applications.append((p["id"], co["id"])); self.pending.setdefault(co["owner"], []).append(f"{p['name']} has asked you for a job at {co['name']}.")
+                self.applications.append((p["id"], co["id"])); self.pending.setdefault(co["owner"], []).append(f"{p['name']} has asked you for a job at {co['name']}. (Hire them, turn them down, or leave it: your call.)")
+                self._ask_job(p, co["owner"], co["name"])
                 self.ev("job_application", actors=[p["id"], co["owner"]], text=f"{p['name']} asks {w.name(co['owner'])} for a job at {co['name']}.", importance=4)
+        elif do == "turn_down" and q:
+            # the boss says no: the person who asked hears it (Nov 20: in North Lake, people asked 33 times and never heard an answer)
+            asks = [a for a in getattr(self, "job_asks", []) if a["who"] == q["id"] and a["boss"] == p["id"]]
+            if asks:
+                for a in asks: self.job_asks.remove(a)
+                self.pending.setdefault(q["id"], []).append(f"{p['name']} told you there's no work for you at {asks[-1]['where']} right now." + (f" ({detail})" if detail else ""))
+                self.ev("job_refused", actors=[p["id"], q["id"]], text=f"{p['name']} tells {q['name']} there's no work for them at {asks[-1]['where']}.", importance=4)
         elif do in ("hire", "fire") and q and not self.company_of(p) and econ.shop_of(w, p):
             k = econ.shop_of(w, p)
             if do == "hire":
@@ -403,6 +412,7 @@ class Engine:
                     econ.shop_leave(w, q); co["employees"].append(q["id"]); q["employer"] = co["id"]; q["job"] = f"works at {co['name']}"
                     if amt and amt > 0: q["wage_day"] = round(max(amt / 5.5, econ.min_wage_day(w, co)), 3)
                     self.ev("hired", actors=[p["id"], q["id"]], text=f"{p['name']} hires {q['name']} at {co['name']}.", importance=6, public=True)
+                    self.job_asks = [a for a in getattr(self, "job_asks", []) if a["who"] != q["id"]]
                 elif do == "fire" and q["id"] in co["employees"]:
                     w.unemployment_claim(co, [q["id"]], firm_size=len(co["employees"]))
                     co["employees"].remove(q["id"]); q["employer"] = None; q["job"] = "out of work"
@@ -610,8 +620,22 @@ class Engine:
         if m and (p["id"] in w.town["offices"]["council"] or p["id"] == w.town["offices"]["mayor"]):
             m["votes"][p["id"]] = (detail or "").lower().startswith("y")
 
+    def _ask_job(self, p, boss, where):
+        if not hasattr(self, "job_asks"): self.job_asks = []
+        if not any(a["who"] == p["id"] and a["boss"] == boss for a in self.job_asks):
+            self.job_asks.append({"who": p["id"], "boss": boss, "where": where, "day": self.w.day, "told": False})
+
+    def job_silence(self):
+        """A week with no answer: the person who asked notices they haven't heard back (once). What they do about it is theirs."""
+        for a in getattr(self, "job_asks", []):
+            if not a["told"] and self.w.day - a["day"] >= 7:
+                a["told"] = True
+                self.pending.setdefault(a["who"], []).append(f"It's been a week and you haven't heard back from {self.w.name(a['boss'])} about the work you asked for at {a['where']}.")
+        self.job_asks = [a for a in getattr(self, "job_asks", []) if self.w.day - a["day"] <= 30]
+
     def night(self):
         w = self.w
+        self.job_silence()
         for e in w.town["elections"]:
             if e["status"] != "open": continue
             e["status"] = "closed"; tallies = {}

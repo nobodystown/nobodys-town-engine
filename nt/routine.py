@@ -15,7 +15,7 @@ HARD = re.compile(r"\b(steal|break|burn|threaten|fight|hit|bribe|hide|search|fol
 WORK_VERBS = re.compile(r"\b(fix|repair|patch|build|nail|shingle|tear|dig|plow|shovel|chop|haul|carry|steal|take|borrow|break|burn|confront|accuse|threaten|fight|hit|kiss|propose|court|hire|fire|buy|bribe|hide|search|follow|spy)\b", re.I)
 SERIOUS_LETTER = re.compile(r"sheriff|police|newspaper|editor|governor|senator|congress|company|bank|lawyer|attorney|court|accus|threat|anonymous|complain|apply|application|order|catalog|insurance|government|draft board|recruit|blackmail|confess", re.I)
 SMALL_GOODS = re.compile(r"spool|notion|thread|button|egg|pie|cake|bread|vegetable|preserve|jam|jelly|canned|firewood|kindling|fish|pelt|fur|quilt|household goods|sample case|needle|pins|ribbon|seed|honey|butter|milk|cream|apples|berries|sewing", re.I)
-LEISURE = re.compile(r"\b(read|reading|play (a few tunes|tunes|the piano|piano|guitar|the guitar|harmonica|cards|checkers|solitaire)|listen(ing)? to the radio|knit|knitting|crochet|whittl|rest by|sit by the (stove|fire)|crossword|write in (my|a) (diary|journal))", re.I)
+LEISURE = re.compile(r"\b(read|reading|play (a (little|bit of|few) |some )?(a few tunes|tunes|the piano|piano|guitar|the guitar|harmonica|cards|checkers|solitaire)|listen(ing)? to the radio|(with|by|to|on) the radio|put (my|his|her) feet up|knit|knitting|crochet|whittl|rest by|sit by the (stove|fire)|crossword|write in (my|a) (diary|journal))", re.I)
 STOP = {"the", "near", "over", "with", "from", "into", "evening", "service", "free", "town", "walk", "look", "some", "little", "bit", "about"}
 
 

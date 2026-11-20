@@ -105,7 +105,8 @@ def main(run, lo=0, hi=10 ** 9):
     print("  most in conversation: " + ", ".join(f"{nm(p)} {c}" for p, c in talk.most_common(6)))
     quiet = [nm(int(p)) for p, v in sn[-1]["people"].items() if v["alive"] and v["age"] >= 12 and not v["offtown"] and talk[int(p)] == 0]
     if quiet: print("  never in a conversation: " + ", ".join(quiet))
-    real_life(ev, sn, days)
+    live0 = min((e["day"] for e in ev if e["kind"] == "conversation"), default=sn[0]["day"])  # a warmed TEST town has rule-only days before this
+    real_life([e for e in ev if e["day"] >= live0], sn, sn[-1]["day"] - live0 + 1)
     threads(ev)
     economy(ev, sn)
     rt = collections.Counter(e["data"].get("kind") for e in ev if e["kind"] == "routine")

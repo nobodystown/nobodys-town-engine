@@ -26,7 +26,7 @@ PLAN_FORMAT = """Live your day as yourself. Return JSON:
  "feelings": {"<person's full name>": <-20..20>}  (optional: only if something changed how you feel about someone),
  "rate": {"<number of a NEW memory above>": <1-10, how much it matters to you>},
  "slots": [ {"slot": "morning"|"midday"|"evening"|"night", "place": "<place id>", "do": "<action>", "target": "<full name, measure id, or null>", "amount": <dollars or null>, "detail": "<what exactly, in your own words>"} x4 ]}
-Actions the town understands (alphabetical): apply_job, approve_loan, ask_loan, attempt, bank_loan, build, buy, chores, court, declare_candidacy, deny_loan, deposit, dig, eat_at_diner, end_relationship, enforce, explore, farm, fire, fish, give, hire, home, lend, leave_town, pay, phone, propose_marriage, propose_measure, quit_job, repair, school, sell, set_price, set_wage, shop, shop_at, side_work, sleep, start_business, talk, visit, vote, withdraw, work, write_letter.
+Actions the town understands (alphabetical): apply_job, approve_loan, ask_loan, attempt, bank_loan, build, buy, chores, court, declare_candidacy, deny_loan, deposit, dig, eat_at_diner, end_relationship, enforce, explore, farm, fire, fish, give, hire, home, lend, leave_town, pay, phone, propose_marriage, propose_measure, quit_job, repair, school, sell, set_price, set_wage, shop, shop_at, side_work, sleep, start_business, talk, turn_down, visit, vote, withdraw, work, write_letter.
 - talk, phone, court, ask_loan, propose_marriage, end_relationship: target = a person.
 - vote: target = a candidate's full name or a measure id; detail = "yes" or "no" for a measure.
 - chores: everyday work around the house, yard, farm or errands; say what in detail.
@@ -37,6 +37,7 @@ Actions the town understands (alphabetical): apply_job, approve_loan, ask_loan, 
 - bank_loan: amount = dollars, detail = what it's for; target = a bank in town or its owner, or null for the bank in the county seat.
 - deposit / withdraw: amount = dollars (target = which bank, or null).
 - apply_job / hire: target = the person who does the hiring / the person you hire; amount = weekly pay offered, or null.
+- turn_down (if someone asked you for work): target = that person; detail = what you tell them, or null.
 - set_price (if you run the store or the diner): store: amount = percent above (+) or below (-) county-seat prices; diner: amount = cents for a meal.
 - set_wage (if people work for you): amount = dollars a week; target = one worker, or null for everyone.
 - approve_loan / deny_loan (if you own a bank): target = the applicant; amount; detail = the rate and months.
