@@ -130,9 +130,10 @@ def trim_unsaved(out, day):
             print(f"trimmed {len(rows) - len(keep)} unsaved rows from {f} (day {day} replays)", flush=True)
 
 
-def cmd_season(n, budget, minutes=None):
+def cmd_season(n, budget, minutes=None, workers=None):
     """Runs (or resumes) season n of the OFFICIAL town. Saves after EVERY day, so an interrupted run loses at most one day.
-    --minutes M stops cleanly after about M minutes; run the same command again to continue."""
+    --minutes M stops cleanly after about M minutes; run the same command again to continue.
+    --workers W runs up to W conversations (and plans, rulings) at once. Speed only: rules and odds unchanged. Conversations and plans roll no dice; parallel referee rulings already shared one dice stream at 8 (approved by Aaron, Nov 20)."""
     import time
     from .engine import Engine
     from .llm import BudgetExceeded
@@ -150,6 +151,7 @@ def cmd_season(n, budget, minutes=None):
         json.dump({e.w.people[k]["name"]: m for k, m in got.items()}, open(os.path.join(OFFICIAL, "outside_minds.json"), "w"), indent=1)
         print(f"outside minds: {len(got)} of {sum(1 for p in e.w.people.values() if p['alive'] and p['age'] >= 18)} adults", flush=True)
     e.compress = True
+    if workers: e.workers = workers
     from . import history
     year = gen["start"]["year"] + n - 1  # episode n is one calendar year (episode 1 = 1950)
     if year > history.ERA_THROUGH:
@@ -202,6 +204,7 @@ if __name__ == "__main__":
     if not a: print(__doc__); sys.exit()
     budget = float(a[a.index("--budget") + 1]) if "--budget" in a else 15.0
     {"ping": cmd_ping, "smoke": cmd_smoke, "roll": cmd_roll}.get(a[0], lambda: None)()
-    if a[0] == "season": cmd_season(int(a[1]), budget, float(a[a.index("--minutes") + 1]) if "--minutes" in a else None)
+    if a[0] == "season": cmd_season(int(a[1]), budget, float(a[a.index("--minutes") + 1]) if "--minutes" in a else None,
+                                       int(a[a.index("--workers") + 1]) if "--workers" in a else None)
     if a[0] == "episode": cmd_episode(int(a[1]))
     if a[0] == "fix": cmd_fix(a[1], a[a.index("--base") + 1])
