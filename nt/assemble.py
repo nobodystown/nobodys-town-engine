@@ -210,8 +210,15 @@ def build_timeline(plan, sn, gen, short=False, vo=None):
                 hids = list(dict.fromkeys(str(s["people"][str(a)]["household"]) for a in e["actors"][:3] if str(a) in s["people"]))
                 walkers = [(a, 90 + i * 80, 0, 1 if i % 2 == 0 else -1) for i, a in enumerate(e["actors"][:3]) if str(a) in s["people"] and s["people"][str(a)]["alive"]]
                 establishing(e["day"], e["slot"], hids, sc.get("narration") or overlays.news_text(e), walkers, place=e.get("place"))
+    # ---- closing scene (Aaron, Nov 21): end on a real moment from the last days, then the street goes dark
+    cs = plan.get("closing_scene") or {}
+    if cs.get("dialogue_index") in dl and cs.get("lines"):
+        d = dl[cs["dialogue_index"]]; s = snap_at(d["day"])
+        hh = [str(s["people"][str(x)]["household"]) for x in (d["a"], d["b"])]
+        establishing(d["day"], d["slot"], list(dict.fromkeys(hh)), cs.get("narration") or None, place=d["place"])
+        conversation(d, cs["lines"])
     last = sn[-1]
-    if plan.get("closing"): T.add("pan", 4.0, plan["closing"], snap=last, board=None, news=None, hids=all_h(last)[:6], tod="evening", weather=last["weather"].get("sky", "clear"), season=last["season"], walkers=[], sign_pop=overlays.population(last), sign_town=gen["name"])
+    if plan.get("closing"): T.add("pan", 6.0, plan["closing"], lights_out=True, snap=last, board=None, news=None, hids=all_h(last)[:6], tod="evening", weather=last["weather"].get("sky", "clear"), season=last["season"], walkers=[], sign_pop=overlays.population(last), sign_town=gen["name"])
     step = max(1, len(sn) // 12); lapse = sn[::step][:13] + ([sn[-1]] if sn[::step][-1] is not sn[-1] else [])
     if not short:
         T.add("timelapse", 9.0, None, snaps=lapse, season=last["season"])  # the year in nine seconds: what changed, where
@@ -238,7 +245,17 @@ def pan_for(sh, seed):
 
 def render_scene(sh, t_local, seed, gen):
     k = sh["kind"]
-    if k == "pan": return pan_for(sh, seed).frame(min(1.0, t_local / max(0.1, sh["dur"])), t_local)
+    if k == "pan":
+        u = min(1.0, t_local / max(0.1, sh["dur"])); img = pan_for(sh, seed).frame(u, t_local)
+        if sh.get("lights_out"):  # the same street at night, faded in over the second half: the town goes to bed
+            key = ("night", id(sh))
+            if key not in _PANS: _PANS[key] = scenes.StreetPan(sh["snap"], seed, sh["hids"], "night", sh["weather"], sh["season"], (), gen=_GEN.get("g"), sign_pop=sh.get("sign_pop"), town=sh.get("sign_town"))
+            a = max(0.0, min(1.0, (u - 0.45) / 0.45))
+            if a > 0:
+                from PIL import Image as _I
+                img = _I.blend(img, _PANS[key].frame(u, t_local), a)
+                if u > 0.85: img = _I.blend(img, _I.new("RGB", img.size, (0, 0, 0)), min(1.0, (u - 0.85) / 0.15) * 0.6)
+        return img
     if k == "overview": return _cached(sh, "ov", lambda: scenes.overview(sh["snap"], seed, gen, sh["tod"], sh["season"], sh["weather"], 0))
     if k == "cutaway": return _cached(sh, "cut", lambda: cutaways.Cutaway(sh["cut"], sh["snap"], seed, gen, sh["event"], sh.get("prev"))).frame(t_local)
     if k == "timelapse":

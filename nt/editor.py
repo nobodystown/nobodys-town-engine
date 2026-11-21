@@ -24,6 +24,8 @@ MAKE IT EASY TO FOLLOW
 - Episode shape: what each lead wants or is facing -> what happens -> where it's left at year's end.
 - The narrator SETS UP each scene before anyone speaks: one short sentence, 20 words or fewer, saying who, where and what's going on, so the viewer knows what to listen for. The residents carry the story; the narrator only bridges. Leave a setup empty when the scene speaks for itself. Plain, warm, specific. Never open with a date ("On September 23rd..."); use natural time words (that morning, two days later, by the weekend) only when they help.
 {welcome_rule}
+CLOSING
+- Closing scene: end the year on a real moment. Pick ONE conversation from LAST DAYS OF THE YEAR (ideally with a lead), 2-3 lines, that leaves the viewer with how the year ends for them. Then the closing sentence plays over the evening street as the lights go out.
 HOOK AND PACE
 - Cold open: the single most gripping real exchange involving a lead, 1-3 lines, plus ONE narrator sentence that sets up the stakes without giving away how it ends.
 - Cut hard: at most 4 lines from any conversation. For each line keep only the sentence(s) that carry it, copied EXACTLY (word for word). Drop small talk, repetition and recaps.
@@ -39,6 +41,7 @@ OUTPUT one JSON object:
  "welcome": "<{welcome_field}>",
  "cold_open": {{"dialogue_index": <index>, "lines": [{{"n": <line number>, "keep": "<exact words>"}}], "hook": "<one narrator sentence>"}},
  "scenes": [{{"lead": "<lead's full name>", "dialogue_index": <index or null>, "lines": [{{"n": <line number>, "keep": "<exact words>"}}], "event_ids": [<ids, may be empty>], "setup": "<one narrator sentence of 20 words or fewer before the scene, or empty if the last scene already set it up>"}}],
+ "closing_scene": {{"dialogue_index": <index from LAST DAYS OF THE YEAR>, "lines": [{{"n": <line number>, "keep": "<exact words>"}}], "setup": "<one narrator sentence, 20 words or fewer, or empty>"}},
  "closing": "<one sentence: where each lead is left>",
  "teaser": "<one true sentence about something still unresolved>",
  "shorts": [{{"dialogue_index": <index>, "lines": [{{"n": <line number>, "keep": "<exact words>"}}], "hook": "<under 50 characters>"}}],
@@ -201,6 +204,12 @@ def ledger(ev, sn, gen, notes=()):
             "news": [e["data"].get("headline") for e in ev if e["kind"] == "history"][:2], "notes": list(notes)}
 
 
+def last_days(dl, n_days=7, k=10):
+    if not dl: return []
+    end = dl[-1]["day"]
+    return sorted(sorted((i for i, d in enumerate(dl) if d["day"] > end - n_days), key=lambda i: -dl_score(dl[i]))[:k])
+
+
 def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minutes=13, leads=2):
     ev, dl, sn = load_run(run_dir)
     cut, cut_notes = load_cuts(run_dir)
@@ -228,6 +237,13 @@ def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minu
             d = dl[i]
             lines.append(f"<{i}> {d['date']} {d['slot']}, {d['medium']}, at {d['place']}: {names(d['a'])} & {names(d['b'])}" + (f" (deal: {d['deals'][0]['terms']})" if d["deals"] else ""))
             for k, (sp, t) in enumerate(d["lines"]): lines.append(f"   {k}. {sp}: {t}")
+        tail = last_days(dl)
+        def dline(i, cap=None):
+            d = dl[i]; L = [f"<{i}> {d['date']} {d['slot']}, {d['medium']}, at {d['place']}: {names(d['a'])} & {names(d['b'])}"]
+            return L + [f"   {k}. {sp}: {t}" for k, (sp, t) in enumerate(d["lines"][:cap] if cap else d["lines"])]
+        lines += ["", "LAST DAYS OF THE YEAR (pick the closing scene from these):"]
+        for i in tail: lines += dline(i)
+        plan_in = {"tail": tail}
         out = None
         for attempt in range(2):  # one retry if the reply didn't come back as clean JSON
             out, raw = llm.call_json("editor", [rules], [{"role": "user", "content": "\n".join(lines)}], max_tokens=24000)
@@ -235,15 +251,40 @@ def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minu
         plan = out or {}
     else:
         plan = mock_plan(ev, dl, sn, gen, ts, episode_no, names, hh_name)
+        plan_in = {"tail": last_days(dl)}
     plan = validate(plan, ev, dl)
+    plan = validate_extras(plan, ev, dl, plan_in)
     followed = [l["name"] for l in plan.get("leads", [])] or [t.get("name", "") for t in plan.get("threads", [])]  # live plans name leads; mock plans name threads
     notes = [f"Followed: " + ", ".join(followed)] if followed else []
     plan["ledger"] = ledger(ev, sn, gen, notes); plan["family_board"] = family_board(sn, gen); plan["town"] = {"name": gen["name"], "geography": gen["geography"], "region": gen["region"]}; plan["episode"] = episode_no
     used_e = {i for s in plan["scenes"] for i in s.get("event_ids", [])}
     plan["_events"] = {e["id"]: e for e in ev if e["id"] in used_e or overlays_news(e)}
-    used_d = {s["dialogue_index"] for s in plan["scenes"] if s.get("dialogue_index") is not None} | {plan["cold_open"].get("dialogue_index")} | {x.get("dialogue_index") for x in plan.get("shorts", [])}
+    used_d = {s["dialogue_index"] for s in plan["scenes"] if s.get("dialogue_index") is not None} | {plan["cold_open"].get("dialogue_index")} | {x.get("dialogue_index") for x in plan.get("shorts", [])} | {(plan.get("closing_scene") or {}).get("dialogue_index")}
     plan["_dialogues"] = {i: dl[i] for i in used_d if i is not None and 0 <= i < len(dl)}
     json.dump(plan, open(os.path.join(run_dir, f"episode_{episode_no}_plan.json"), "w"), indent=1, default=str)
+    return plan
+
+
+def validate_extras(plan, ev, dl, plan_in):
+    """Closing scene (Aaron, Nov 21): must be one of the year's last-days conversations, exact words only. If the editor's pick
+    fails, fall back to the latest strong real one; never repaired by invention."""
+    def keep_lines(di, ls, cap):
+        out = []
+        for x in ls or []:
+            try: k = int(x.get("n") if isinstance(x, dict) else x)
+            except (TypeError, ValueError): continue
+            if 0 <= k < len(dl[di]["lines"]) and k not in [z["n"] for z in out]:
+                full = dl[di]["lines"][k][1]; kp = _norm(x.get("keep")) if isinstance(x, dict) else ""
+                out.append({"n": k, "keep": kp if kp and kp in _norm(full) else full})
+        return sorted(out, key=lambda z: z["n"])[:cap]
+    used = {s["dialogue_index"] for s in plan["scenes"] if s["dialogue_index"] is not None} | {plan["cold_open"].get("dialogue_index")}
+    cs = plan.get("closing_scene") or {}; di = cs.get("dialogue_index")
+    if not (isinstance(di, int) and di in plan_in["tail"]):
+        di = next((i for i in reversed(plan_in["tail"]) if i not in used), None)  # fallback: the latest strongest real one
+    plan["closing_scene"] = None
+    if di is not None and di not in used:
+        ls = keep_lines(di, cs.get("lines"), 3) or [{"n": k, "keep": dl[di]["lines"][k][1]} for k in range(min(2, len(dl[di]["lines"])))]
+        plan["closing_scene"] = {"dialogue_index": di, "lines": ls, "narration": short_setup(cs.get("setup") or "")}
     return plan
 
 
