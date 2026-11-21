@@ -1,8 +1,12 @@
 # Nobody's Town: rule changelog
 
-The rules were locked at the roll. After that, only mechanical fixes are allowed: a fix may stop a crash
-or a mechanical failure, and must not change what can happen in town. Every fix is listed here with its
-exact diff and the fingerprint chain, so anyone can check it.
+The rules were locked at the roll. While a year is running, only mechanical fixes are allowed: a fix may
+stop a crash or a mechanical failure, and must not change what can happen in town (fixes 1-3).
+Changes to how the town works are made only in the break between two years (two episodes), before the
+next year starts. They fix problems found in the town's own record, never steer a resident or a story,
+and never change what already happened. The first such break was at the end of 1950 (fixes 4-11, logged
+as "season-break" changes). Every change is listed here with its exact diff and the fingerprint chain,
+so anyone can check it.
 
 - Roll settings fingerprint: `ea836d0f3b6d8de2ccf6d548bf2211cd6e5021a3fa52fda37c19ade61687eced`
 
