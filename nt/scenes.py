@@ -391,13 +391,14 @@ def meet_card(snap, seed, pid, name, sub, intro):
     return bg
 
 
-def family_board_card(fb, town):
+def family_board_card(fb, town, episode=None):
     """Viewer-only standings. The residents never see this; it's our scoreboard of what they did."""
     im = Image.new("RGB", (OW, OH), (244, 236, 214)); d = ImageDraw.Draw(im); r = random.Random(5)
     for _ in range(4000): d.point((r.randrange(OW), r.randrange(OH)), fill=(232, 222, 198))
     d.rectangle([24, 24, OW - 24, OH - 24], outline=INK, width=3)
     t = "THE FAMILY BOARD"; f = font(SERIF, 44); d.text(((OW - d.textlength(t, font=f)) / 2, 40), t, font=f, fill=INK)
-    sub = f"{town.upper()}  ·  END OF {fb['year_end']}"; f2 = font(FB, 18); d.text(((OW - d.textlength(sub, font=f2)) / 2, 96), sub, font=f2, fill=RED)
+    # quarterly parts say "END OF PART 2 · SPRING 1950" (Nov 21)
+    sub = f"{town.upper()}  ·  END OF {episode if isinstance(episode, str) else fb['year_end']}"; f2 = font(FB, 18); d.text(((OW - d.textlength(sub, font=f2)) / 2, 96), sub, font=f2, fill=RED)
     cols = [(60, "#"), (110, "FAMILY"), (370, "SAVINGS"), (560, "AT HOME"), (700, "BUSINESSES"), (1000, "IN OFFICE")]
     for x, h in cols: d.text((x, 136), h, font=font(FR, 15), fill=(110, 96, 90))
     d.line([(52, 160), (OW - 52, 160)], fill=INK, width=2)

@@ -210,7 +210,7 @@ def ledger(ev, sn, gen, notes=()):
 # WORLD-written record that names a resident next to a choice/guilt word never airs; it stays in the town's log. Residents' own
 # words and their own refereed actions are untouched.
 EDIT_GUILT = re.compile(r"\b(drinks?|drinking|drank|drunk|lies|lied|lying|tells? \w+ it went|hides?|hid|hidden|secret\w*|burn(ed|t|s)? (the |a )?\w*\s?letter|"
-                        r"takes? (another |the )?\$\s?\d+|took (another |the )?\$\s?\d+|from the (till|drawer|tin|register)|covered it|skimm\w*|pinch\w*|embezzl\w*)\b", re.I)
+                        r"takes? (another |the )?\$\s?\d+|took (another |the )?\$\s?\d+|from the (till|drawer|tin|register)|covered it|skimm\w*|pinch\w*|embezzl\w*|alter(ed|ation|ing)|forg(ed|ery)|tamper\w*|falsif\w*|doctored|cooked the books|fraud\w*)\b", re.I)
 
 
 def world_authored_guilt(ev, sn):
@@ -221,6 +221,8 @@ def world_authored_guilt(ev, sn):
     firsts = {}
     for n in ppl: firsts.setdefault(n.split()[0], []).append(n)
     names = list(ppl) + [f for f, v in firsts.items() if len(v) == 1 and len(f) > 2]
+    # Nov 21: a resident can be pinned by job title alone ("the clerk's alteration is confirmed", 1950-05-28), so titles count as names here
+    names += ["clerk", "treasurer", "mayor", "foreman", "constable", "sheriff", "bookkeeper", "landlord", "councilman", "councilwoman", "postmaster", "grocer"]
     rx = re.compile(r"\b(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")\b")
     out = set()
     for e in ev:

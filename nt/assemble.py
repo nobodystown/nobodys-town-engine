@@ -223,7 +223,7 @@ def build_timeline(plan, sn, gen, short=False, vo=None):
     if not short:
         T.add("timelapse", 9.0, None, snaps=lapse, season=last["season"])  # the year in nine seconds: what changed, where
         T.add("ledger", 11.0, None, L=plan["ledger"], town=gen["name"], episode=plan["episode"])
-        if plan.get("family_board", {}).get("rows"): T.add("family", 9.0, None, fb=plan["family_board"], town=gen["name"])
+        if plan.get("family_board", {}).get("rows"): T.add("family", 9.0, None, fb=plan["family_board"], town=gen["name"], episode=plan["episode"])
     if plan.get("teaser"): T.add("pan", 4.0, "Next time: " + plan["teaser"], snap=last, board=None, news=None, hids=all_h(last)[-6:], tod="night", weather="clear", season=last["season"], walkers=[], teaser=True)
     if not short: T.add("endscreen", 12.0, None, season=last["season"])
     T.season = last["season"]; T.start_state = overlays.board_state(sn[0]); T.town = gen["name"]
@@ -263,7 +263,7 @@ def render_scene(sh, t_local, seed, gen):
         img = _cached(sh, f"tl{i}", lambda: scenes.overview(sp, seed, gen, "midday", sp["season"], "snow" if sp["season"] == "winter" else "clear", 0)).copy()
         import datetime as _dt
         return scenes.season_stamp(img, f"{sp['season'].upper()} {sp['date'][:4]}")
-    if k == "family": return scenes.family_board_card(sh["fb"], sh["town"])
+    if k == "family": return scenes.family_board_card(sh["fb"], sh["town"], sh.get("episode"))
     if k == "interior": return scenes.interior(sh["snap"], seed, sh["place"], sh["hid"], sh["speakers"], sh["line"], sh["tod"], sh.get("zoom"), sh.get("thought"), sh.get("intro"))
     if k == "newspaper": return scenes.newspaper(sh["town"], sh["date"], sh["headline"], sh.get("sub", ""))
     if k == "meet": return scenes.meet_card(sh["snap"], seed, sh["pid"], sh["name"], sh["sub"], sh["intro"])
