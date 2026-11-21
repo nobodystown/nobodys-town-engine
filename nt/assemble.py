@@ -308,10 +308,18 @@ def plan_boards(T):
         sh["_delta"] = overlays.deltas(prev, b); prev = b
 
 
+def ENC_EPISODE():
+    """NT_MASTER=1 (Nov 21): upload master. 3x nearest-neighbor to 3840x2160 (pixel-perfect; YouTube gives 4K uploads its better codec
+    and bitrate, so pixel art stays crisp even at 1080p), high quality. Default: the quick 720p preview encode."""
+    if os.environ.get("NT_MASTER"):
+        return ["-vf", "scale=3840:2160:flags=neighbor", "-c:v", "libx264", "-preset", "medium", "-tune", "animation", "-crf", "16"]
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+
+
 def render(T, out_mp4, seed, gen, fps=24):
     plan_boards(T); _GEN["g"] = gen
     p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{OW}x{OH}", "-r", str(fps), "-i", "-",
-                          "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_mp4], stdin=subprocess.PIPE)
+                          *ENC_EPISODE(), "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_mp4], stdin=subprocess.PIPE)
     for sh in T.shots:
         sh["_season"] = getattr(T, "season", "winter"); town = getattr(T, "town", "")
         n = max(1, int(round(sh["dur"] * fps))); animated = sh["kind"] in ("pan", "cutaway", "timelapse")

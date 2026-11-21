@@ -266,7 +266,7 @@ def part_rules(rules, part, year):
         ("how the year ends for them", "how the quarter ends for them"),
         ("most surprising TRUE outcome of the year", "most surprising TRUE outcome of the quarter"),
         ('A good shape: "{pop} AI People, One Year: <true outcome>" or "<lead> Bet Everything on <true thing>".'.replace("{pop}", "%POP%"),
-         f'The title MUST end with " | {year}, Part {part}: {season}" (the stakes part before it stays under 40 characters). A good shape: "<lead> Bet Everything on <true thing> | {year}, Part {part}: {season}".'),
+         f'Lead with the AI premise in plain words, with the town\'s real number of residents (rounded) and the 1950s setting, then the quarter\'s true turn; this is the shape that wins in this niche (vidIQ research, Nov 21). Part 1 of {year} was "I Left 40 AIs Alone in a 1950s Town. Winter Came." Do NOT reuse that wording: vary it every part (e.g. "40 AIs, One 1950s Town: <true turn>", "<true surprising outcome>. Every Person Here Is AI."). Never "scientists", never claims of feelings or sentience. The part and season go in the description, not the title.'),
         ("never a claim the year doesn't support", "never a claim the quarter doesn't support"),
         ("The year's big public events (a fire", "The quarter's big public events (a fire"),
         ('"teaser": "<one true sentence about something still unresolved>"', '"teaser": "<one true sentence about something still unresolved that carries into the next part>"'),

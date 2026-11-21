@@ -18,7 +18,8 @@ def frame_vertical(scene_img, hook, town, dlg=None, board=None, cap=None):
     if board: strip = overlays.board_strip(board, town); bg.paste(strip, STRIP_XY, strip)
     d = ImageDraw.Draw(bg); f = font(FB, 64)
     for k, r in enumerate(scenes.wrap(d, hook.upper(), f, VW - 140)[:3]): tw = d.textlength(r, font=f); d.text(((VW - tw) / 2, 210 + k * 80), r, font=f, fill=BUTTER, stroke_width=5, stroke_fill=(0, 0, 0))
-    tag = f"NOBODY'S TOWN · {town.upper()}"; ft = font(FB, 30); d.text(((VW - d.textlength(tag, font=ft)) / 2, 140), tag, font=ft, fill=CREAM)
+    # vidIQ research Nov 21: the AI premise is the hook in this niche; say it in the first second
+    tag = "EVERY RESIDENT IS AN AI · NOBODY'S TOWN"; ft = font(FB, 34); d.text(((VW - d.textlength(tag, font=ft)) / 2, 140), tag, font=ft, fill=CREAM, stroke_width=4, stroke_fill=(0, 0, 0))
     if cap:
         fc = font(FB, 52)
         for k, r in enumerate(scenes.wrap(d, cap, fc, VW - 140)[:4]): tw = d.textlength(r, font=fc); d.text(((VW - tw) / 2, 1460 + k * 70), r, font=fc, fill=(255, 255, 255), stroke_width=5, stroke_fill=(0, 0, 0))
@@ -60,7 +61,7 @@ def build_short(spec, d, sn, gen, out, fps=24, durs=None):
         if t > 55 and not durs: break  # voiced shorts: the clip's own lines decide the length (Shorts run up to 3 minutes)
     json.dump(vlines, open(out.replace(".mp4", "_voices.json"), "w"), indent=1)
     p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{VW}x{VH}", "-r", str(fps), "-i", "-",
-                          "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out], stdin=subprocess.PIPE)
+                          *(["-c:v", "libx264", "-preset", "slow", "-tune", "animation", "-crf", "14"] if os.environ.get("NT_MASTER") else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]), "-pix_fmt", "yuv420p", "-movflags", "+faststart", out], stdin=subprocess.PIPE)
     for img, dur in frames:
         b = img.tobytes()
         for _ in range(int(dur * fps)): p.stdin.write(b)
