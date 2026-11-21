@@ -88,8 +88,33 @@ def cmd_fix(reason, base):
     print(f"recorded fix {len(fixes)}: {head[:12]} -> {fixes[-1]['new_fingerprint'][:12]} ({', '.join(files)})")
 
 
+OR_MIN_CREDIT = 2.0  # stop before a day if OpenRouter has less than this left (Q3: credits ran dry and 533 calls fell back to Claude)
+DAY_WATCHDOG_MIN = 15  # a day that takes longer than this means an API call is hung: stop (approved by Aaron, Nov 20)
+
+
+def openrouter_left():
+    """Dollars left on the OpenRouter account (None if no key). Free: reads the account, no model call."""
+    import urllib.request
+    kp = os.path.expanduser("~/.secrets/openrouter_key")
+    if not os.path.exists(kp): return None
+    req = urllib.request.Request("https://openrouter.ai/api/v1/credits", headers={"Authorization": f"Bearer {open(kp).read().strip()}"})
+    d = json.loads(urllib.request.urlopen(req, timeout=30).read())["data"]
+    return round(d["total_credits"] - d["total_usage"], 2)
+
+
 def cmd_ping():
-    llm = LLM("live", 0.05); t, u, m = ping(llm); print("reply:", t, "| cost:", m)
+    """Checks every API the town uses: Claude, the OpenRouter balance, and one tiny call to each outside model."""
+    from .llm import OUTSIDE
+    llm = LLM("live", 0.05); t, u, m = ping(llm); print("claude:", t, "| cost:", m)
+    left = openrouter_left(); print(f"openrouter credit left: ${left}")
+    bad = left is not None and left < OR_MIN_CREDIT
+    for name, model in OUTSIDE.items():
+        try:
+            txt, _ = llm._call_outside("resident", model, ["You are a test."], [{"role": "user", "content": "Reply with exactly: online"}], 20, 0)
+            print(f"{name} ({model}): ok: {txt.strip()[:30]}")
+        except Exception as ex: print(f"{name} ({model}): FAILED: {str(ex)[:160]}"); bad = True
+    print("PING FAILED: fix before running the town" if bad else "PING OK")
+    if bad: sys.exit(2)
 
 
 def cmd_smoke():
@@ -162,12 +187,35 @@ def cmd_season(n, budget, minutes=None, workers=None):
     end = prog["first_day"] + (dt.date(year + 1, 1, 1) - max(e.w.date, dt.date(year, 1, 1))).days + (e.w.day - prog["first_day"]); t0 = time.time(); stop = None
     def save():
         tmp = state + ".tmp"; pickle.dump(e, open(tmp, "wb")); os.replace(tmp, state)
+    # API health (approved by Aaron, Nov 20): stop rather than let outside minds fall back to Claude, or hang.
+    import threading
+    calls = os.path.join(out, "api_calls.jsonl"); seen = sum(1 for _ in open(calls)) if os.path.exists(calls) else 0
+    beat = {"t": time.time()}
+    def watchdog():
+        while True:
+            time.sleep(30)
+            if time.time() - beat["t"] > DAY_WATCHDOG_MIN * 60:
+                print(json.dumps({"episode": n, "day": e.w.day, "status": f"STOPPED: API FREEZE (one day ran over {DAY_WATCHDOG_MIN} min); half-day is replayed on restart", "spent_this_session": round(e.llm.meter.spent, 3)}), flush=True)
+                os._exit(4)
+    threading.Thread(target=watchdog, daemon=True).start()
+    def api_problem():
+        nonlocal seen
+        if not os.path.exists(calls): return None
+        rows = open(calls).readlines(); new = rows[seen:]; seen = len(rows)
+        fb = [json.loads(r) for r in new if '"fallback": true' in r]
+        if fb: return f"STOPPED: {len(fb)} outside-mind call(s) failed and fell back to Claude ({fb[-1].get('model')}: {fb[-1].get('error', '')[:120]})"
+        return None
     try:
         while e.w.day < end:
-            e.run_day(); save()
+            left = openrouter_left()
+            if left is not None and left < OR_MIN_CREDIT: stop = f"STOPPED: OpenRouter credit low (${left} left); add credits, then run again"; break
+            beat["t"] = time.time(); e.run_day(); save()
             print(f"day {e.w.day}/{end}  {e.w.date_str}  spent ${e.llm.meter.spent:.2f}", flush=True)
+            prob = api_problem()
+            if prob: stop = prob; break
             if minutes and time.time() - t0 > minutes * 60: stop = "paused (time limit); run again to continue"; break
     except BudgetExceeded as ex: stop = f"budget cap: {ex}"
+    except Exception as ex: stop = f"STOPPED: API ERROR {type(ex).__name__}: {str(ex)[:200]}"; print(json.dumps({"episode": n, "day": e.w.day, "end": end, "status": stop, "spent_this_session": round(e.llm.meter.spent, 3)})); sys.exit(3)
     if e.w.day >= end:
         json.dump({"episode": n, "first_day": prog["first_day"], "last_day": e.w.day - 1}, open(os.path.join(out, f"season_{n}.json"), "w"))
         e.progress = None; save(); stop = stop or "season complete"

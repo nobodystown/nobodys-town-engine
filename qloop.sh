@@ -1,7 +1,8 @@
 #!/bin/bash
 # Runs the official town in the background in 20-minute chunks, 16 at once, until day END.
 # Usage: ./qloop.sh END LABEL [SPEND_CAP]   e.g. ./qloop.sh 273 q3 30   (Q3 = days 181-272, Jul 1 - Sep 30, 1950)
-# Near the end it switches to tiny chunks so it stops within a day of END. Stops on the spend cap or 3 failed chunks.
+# Near the end it switches to tiny chunks so it stops within a day of END. Stops on the spend cap, on ANY failed chunk,
+# and on any STOPPED status from golive (outside-mind fallback, OpenRouter credit low, API error, day watchdog). Aaron, Nov 20.
 cd /home/claude
 END=$1; L=$2; CAP=${3:-30}; TOTAL=0; FAILS=0
 day() { python3 -c "import pickle;print(pickle.load(open('nobodys_town/OFFICIAL/state.pkl','rb')).w.day)"; }
@@ -13,10 +14,10 @@ while true; do
   cat $L.chunk >> $L.full
   LAST=$(grep '^{' $L.chunk | tail -1)
   if [ -z "$LAST" ]; then
-    FAILS=$((FAILS+1)); echo "$(date +%H:%M) chunk ended without summary (fail $FAILS)" >> $L.progress; tail -15 $L.chunk >> $L.progress
-    [ $FAILS -ge 3 ] && { echo "3 failures, stopping" >> $L.progress; break; }; sleep 5; continue
+    echo "$(date +%H:%M) ALERT: chunk ended without summary, stopping" >> $L.progress; tail -15 $L.chunk >> $L.progress; break
   fi
   FAILS=0
+  case "$LAST" in *STOPPED*) echo "$(date +%H:%M) ALERT: $LAST" >> $L.progress; break;; esac
   SP=$(echo "$LAST" | python3 -c "import sys,json;print(json.load(sys.stdin)['spent_this_session'])")
   TOTAL=$(python3 -c "print(round($TOTAL+$SP,3))")
   echo "$(date +%H:%M) day $(day) total \$$TOTAL :: $(echo "$LAST" | python3 -c "import sys,json;print(json.load(sys.stdin)['status'])")" >> $L.progress
