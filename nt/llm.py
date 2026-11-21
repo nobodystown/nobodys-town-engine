@@ -9,6 +9,7 @@ API = "https://api.anthropic.com/v1/messages"
 # clerk and editor stay on Claude. OpenRouter reports each call's real cost, so the budget cap covers these too.
 OR_KEY_PATH = os.path.expanduser("~/.secrets/openrouter_key")
 OR_API = "https://openrouter.ai/api/v1/chat/completions"
+OUTSIDE_GIVE_UP_S = 30  # fix 9: seconds to wait for an outside model before falling back to Claude
 OUTSIDE = {"gpt": "openai/gpt-6.2-sol", "gemini": "google/gemini-4-carbon", "deepseek": "deepseek/deepseek-v4.1-flash-1017"}
 OR_REASON = {}  # model -> the reasoning setting it accepts (some can't turn thinking off; then the least, hidden)
 NO_THINK = {"resident", "talk", "referee", "referee_big", "world", "world_big", "law"}
@@ -107,10 +108,15 @@ class LLM:
         msgs = [{"role": "system", "content": "\n\n".join(system)}] + [{"role": m["role"], "content": flat(m["content"])} for m in messages]
         body = {"model": model, "messages": msgs, "max_tokens": max_tokens, "temperature": temperature, "usage": {"include": True},
                 "reasoning": OR_REASON.get(model, {"enabled": False})}
+        # fix 9 (season break): give up after about 30 seconds in all and fall back to Claude (logged), instead of hanging for minutes
+        # until a 504 (8 times in Q2). Odds and dice are unaffected: this only decides how long to wait for the outside model.
+        t_end = time.time() + OUTSIDE_GIVE_UP_S
         for attempt in range(5):
+            left = t_end - time.time()
+            if left < 3: raise RuntimeError(f"OpenRouter gave no answer within {OUTSIDE_GIVE_UP_S}s")
             req = urllib.request.Request(OR_API, data=json.dumps(body).encode(), headers={"Authorization": f"Bearer {self.or_key}", "Content-Type": "application/json", "X-Title": "Nobody's Town"})
             try:
-                with urllib.request.urlopen(req, timeout=120) as resp: out = json.loads(resp.read())
+                with urllib.request.urlopen(req, timeout=left) as resp: out = json.loads(resp.read())
                 if out.get("error"): raise RuntimeError(str(out["error"])[:200])
                 text = (out["choices"][0]["message"].get("content") or "")
                 u = out.get("usage", {}) or {}
@@ -122,10 +128,10 @@ class LLM:
                 msg = e.read().decode(errors="replace")[:300]
                 if e.code == 400 and "mandatory" in msg and body["reasoning"].get("enabled") is False:
                     OR_REASON[model] = body["reasoning"] = {"effort": "minimal", "exclude": True}; continue
-                if e.code in (408, 429, 500, 502, 503, 529) and attempt < 4: time.sleep(2 ** attempt + 1); continue
+                if e.code in (408, 429, 500, 502, 503, 504, 529) and attempt < 4 and t_end - time.time() > 2 ** attempt + 4: time.sleep(2 ** attempt + 1); continue
                 raise RuntimeError(f"OpenRouter {e.code}: {msg}")
             except (urllib.error.URLError, TimeoutError, KeyError, IndexError):
-                if attempt < 4: time.sleep(2 ** attempt + 1); continue
+                if attempt < 4 and t_end - time.time() > 2 ** attempt + 4: time.sleep(2 ** attempt + 1); continue
                 raise
         raise RuntimeError("OpenRouter retries exhausted")
 

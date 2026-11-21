@@ -12,6 +12,10 @@ from . import history, econ, law, routine
 OVERHEAR_QUIRKS = {"nosy", "gossip", "busybody"}
 
 
+
+PASSING = re.compile(r"passing through|passes through|just passing|leaves? (town )?the same day|on (his|her) way\b|mov(es|ed|ing) on|stay(s|ed)? (a|one|two|three|a couple of) nights?|traveling (salesman|through)|for the day|overnight only|one night", re.I)
+STAYING = re.compile(r"\b(stays?|settl\w+|moves? (in|here|to town)|to live|takes a room|rents a room|for good|looking for work)\b", re.I)
+
 class Engine:
     def __init__(self, gen, out_dir, mode="mock", budget=20.0, workers=8):
         self.out = out_dir; os.makedirs(out_dir, exist_ok=True)
@@ -425,6 +429,10 @@ class Engine:
             co = w.companies[p["employer"]]
             if p["id"] in co["employees"]: co["employees"].remove(p["id"])
             p["employer"] = None; p.pop("wage_day", None); p["job"] = "out of work"; self.ev("quit", actors=[p["id"], co["owner"]], text=f"{p['name']} quits {co['name']}.", importance=6, public=True)
+        elif do == "trip":  # fix 5 (season break): away for a while, then home; job and home kept
+            try: days = int(amt) if amt else 3
+            except (TypeError, ValueError): days = 3
+            w.trip(p, detail or "visit kin", days, self.ev)
         elif do == "leave_town":
             kind = "hollywood" if "hollywood" in detail.lower() else "college" if "college" in detail.lower() else "army" if "army" in detail.lower() or "enlist" in detail.lower() else "city"
             w.leave_town(p, detail or "the city", self.ev, kind=kind)
@@ -707,6 +715,9 @@ class Engine:
         from .generator import person
         nm = str(x.get("name") or "").strip()
         if not nm or w.by_name(nm): return
+        # fix 7 (season break): someone described as passing through moves on; only people who come to live here become residents
+        if PASSING.search(str(x.get("about") or "")) and not STAYING.search(str(x.get("about") or "")):
+            self.ev("visitor_gone", text=f"{nm} passes through {w.town['name']} and moves on.", importance=2, data={"no_memory": True}); return
         sn = nm.split()[-1]; hid = max(w.households) + 1
         w.households[hid] = {"id": hid, "surname": sn, "kind": "newcomer", "members": [], "savings": int(self.r.uniform(5, 300)), "debt": 0, "home": "rented",
                              "place": f"home_{hid}", "monthly_housing": 30, "withhold_tax": False, "has_tv": False}

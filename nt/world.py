@@ -521,7 +521,7 @@ class World:
         for pid, rec in list(self.offtown.items()):
             p = self.people[pid]
             if not p["alive"]: continue
-            if rec["kind"] == "jail": continue  # released by the world step when the sentence is served
+            if rec["kind"] in ("jail", "trip"): continue  # released / home again by the world step on the day (fix 5: trips)
             if rec["kind"] == "army":
                 if history.at_war(self.date_str):
                     if self.rng.random() < history.WAR_DEATH_MONTHLY * 30: self.kill(p, "was killed in action overseas", ev); ev("telegram", actors=[i for i in self.households[p["household"]]["members"]], text=f"A Western Union telegram arrives at the {self.households[p['household']]['surname']} house.", importance=10, public=True); continue
@@ -633,6 +633,14 @@ class World:
         for c in self.companies.values():
             if p["id"] in c["employees"]: c["employees"].remove(p["id"])
         ev("left_town", actors=[p["id"]], text=f"{p['name']} leaves for {where}.", importance=7, public=True)
+
+    def trip(self, p, where, days, ev):
+        """Fix 5 (season break): a resident goes away for a while and comes back (kin, a funeral, business elsewhere). Unlike leave_town they
+        keep their job and home; they are marked away so the town's record knows where they are, and they come home on the day they said."""
+        days = max(1, min(60, int(days or 3)))
+        p["offtown"] = True; p["location"] = "away"
+        self.offtown[p["id"]] = {"kind": "trip", "where": where, "months": 0, "left": self.date_str, "until": self.day + days}
+        ev("left_town", actors=[p["id"]], text=f"{p['name']} goes away to {where} for about {days} day{'s' if days > 1 else ''}.", importance=5, public=True)
 
     def return_home(self, p, how, ev):
         p["offtown"] = False; p["location"] = self.households[p["household"]]["place"]; self.offtown.pop(p["id"], None)

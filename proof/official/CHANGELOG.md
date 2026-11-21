@@ -197,3 +197,515 @@ exact diff and the fingerprint chain, so anyone can check it.
              ch, odds, d = roll(self.r, (out or {}).get("options") or [])
              if not ch: continue
 ```
+
+## Fix 4: Season-break rule change (end of 1950, approved by Aaron Nov 20): the world step never writes a resident's choice, confession, decision or guilt; a culprit is an outsider or stays unknown until a resident's own action brings it out. A sentence naming a resident next to a choice word gets a second ask before the dice (no new dice).
+
+- Town day 365 (1951-01-01); recorded 2026-11-21T15:44:57+00:00
+- Files: fate.py
+- Fingerprint: `25a2aef3ee10a8a82bba63b8886d0351f0e58ae56c19ca726d22483b454c5726` -> `bff144e2aa64ceecef79efaccbba9b54d29bd224b415fb40332f7b5e16c96ef1`
+- Diff sha256: `cc2390260930042b2486b260ac93ff37e82ec838b89661ff1b67ad3910cf2c05`
+
+```diff
+--- a/nt/fate.py
++++ b/nt/fate.py
+@@ -41,9 +41,10 @@
+ (percent, summing to 100). The town's dice picks one.
+ - Real life is mostly small and ordinary; weight options the way real life does. Always include one option where it amounts to nothing worth mentioning.
+ - Period- and place-accurate. Nothing cartoonish; nothing that would not happen in a real town of this size.
+-- If someone did something (a theft, damage, a prank), say exactly who: a named resident who would realistically do it given their situation and
+-  character, or an outsider (give a name and one line about them). Who did it is known only to them unless someone saw.
+-- Use exact full names from the list. Never decide what a resident chooses, says or feels; only what happens to them and around them.
++- If someone did something (a theft, damage, a prank), the one who did it is an outsider (give a name and one line about them) or nobody knows who.
++  Never make a resident the culprit: what a resident does is theirs to do, never yours to write. Who did it is known only to them unless someone saw.
++- Use exact full names from the list. Never decide what a resident chooses, says, feels, admits or plans: no confessions, admissions, apologies,
++  decisions, promises or secrets told written for them. Only what happens to them and around them.
+ - If it leaves something unsettled that will play out over time (a crime, a stranger who stays, a debt, an injury, a show in town, a quarrel), open a thread.
+ - If it is an event people could go to (a show, a social, a game, a revival), give it a place with hours, days and price.
+ - If money changes hands or goes missing (stolen, lost, found, paid, docked, won), that option must carry a money operation with the exact amount.
+@@ -69,6 +70,9 @@
+ how often it would go that way in real life (percent, summing to 100). The town's dice picks one.
+ - "Nothing new yet" is usually the most likely; always include it.
+ - Take what residents did as given. Never decide what a resident chooses, says or feels; only what happens around them and as a result.
++- Never write a resident confessing, admitting, apologizing, deciding, agreeing, promising or telling a secret: that happens only if they did it
++  themselves (see WHAT THE PEOPLE INVOLVED DID LATELY). Even when the private truth says a resident did something, it comes out only through what
++  residents themselves did (someone asked, looked, reported or saw), or it stays unknown.
+ - Real matters end. An option may end it: "resolved" (settled one way or another), "given_up" (people let it go), "cold" (no answer, and none coming),
+   but only when that is realistic now. Long-quiet matters do go cold.
+ - If someone is caught, the law follows period procedure: questioning, the county court, a fine, jail time or release.
+@@ -96,15 +100,53 @@
+     return bool(MONEY_NOUN.search(rec) and MONEY_VERB.search(rec))
+ 
+ 
+-def ask_options(llm, role, system, msg, max_tokens):
+-    """Ask for the options; if any says money moved without a money operation, ask once more to fix just that. Then the dice roll as before."""
++# Fix 4 (season break, Dec 31 1950): the world must never write a resident's own choice. In 1950 the world step wrote confessions, admissions
++# and decisions for residents (Harold Pruitt was framed for a theft his own mind never did). A sentence that names a resident next to a
++# choice word, or makes a resident the doer of a theft, gets one more ask to reword it before the dice roll.
++CHOICE = re.compile(r"\b(confess\w*|admit(s|ted|ting)?|owns? up|owned up|apologi[sz]\w*|decides?|decided|deciding|has decided|chooses|chose|resolves? to|"
++                    r"agrees? to|agreed to|promises?|promised|settles? on|settled on|opts? to|opted to|elects? to|makes up (his|her) mind|made up (his|her) mind|breaks down and tells|tells? (him|her|them) the truth)\b", re.I)
++CULPRIT = re.compile(r"\b(stole|steals|pocketed|pockets|swiped|broke into|breaks into|made off with|makes off with|vandali[sz]ed|took the money|takes the money|spend\w* the stolen|hides? the stolen|hid the stolen)\b", re.I)
++
++
++def resident_names(w):
++    """Full names, and first names nobody else in town shares, of everyone living (in town or away)."""
++    ppl = [p for p in w.people.values() if p["alive"]]; firsts = {}
++    for p in ppl: firsts.setdefault(p["name"].split()[0], []).append(p)
++    return [p["name"] for p in ppl] + [f for f, v in firsts.items() if len(v) == 1 and len(f) > 2]
++
++
++def authored_choice(w, o):
++    """True if an option writes a resident's own choice, confession or decision, or makes a resident the culprit."""
++    if not w: return False
++    texts = [str(o.get("record") or o.get("text") or "")]
++    th = o.get("thread")
++    if isinstance(th, dict): texts.append(str(th.get("truth") or ""))
++    texts += [str(x.get("text") or "") for x in (o.get("effects") or []) if isinstance(x, dict) and x.get("op") == "memory"]
++    names = resident_names(w)
++    for s in re.split(r"(?<=[.!?;])\s+", " ".join(texts)):
++        if (CHOICE.search(s) or CULPRIT.search(s)) and any(re.search(r"\b" + re.escape(n) + r"\b", s) for n in names): return True
++    return False
++
++
++def ask_options(llm, role, system, msg, max_tokens, w=None):
++    """Ask for the options; if any fails a check (money moved with no money operation: fix 3; a resident's own choice written by the world: fix 4),
++    ask once more to fix just that. The odds stay as first estimated. Then the dice roll as before."""
+     out, raw = llm.call_json(role, system, [{"role": "user", "content": msg}], max_tokens=max_tokens)
+     opts = (out or {}).get("options") or []
++    num = lambda xs: ", ".join(map(str, xs))
++    notes = []
+     bad = [i + 1 for i, o in enumerate(opts) if isinstance(o, dict) and money_unbacked(o)]
+-    if not bad: return out, raw
+-    note = (f"Option{'s' if len(bad) > 1 else ''} {', '.join(map(str, bad))} say{'' if len(bad) > 1 else 's'} money changed hands or went missing but carr{'y' if len(bad) > 1 else 'ies'} no money operation. "
+-            "Return the same JSON with the same options and odds, adding a money operation with the exact amount to each of those options "
+-            "(or, if no money actually changes hands, rewording the record to say so). Change nothing else.")
++    if bad:
++        notes.append(f"Option{'s' if len(bad) > 1 else ''} {num(bad)} say{'' if len(bad) > 1 else 's'} money changed hands or went missing but carr{'y' if len(bad) > 1 else 'ies'} no money operation: "
++                     "add a money operation with the exact amount (or, if no money actually changes hands, reword the record to say so).")
++    ch = [i + 1 for i, o in enumerate(opts) if isinstance(o, dict) and authored_choice(w, o)]
++    if ch:
++        notes.append(f"Option{'s' if len(ch) > 1 else ''} {num(ch)} may write a resident's own choice (a confession, admission, apology, decision or promise) "
++                     "or make a resident the culprit. Residents make their own choices; the world never writes them. Reword the record, truth and memories "
++                     "to say only what happens to and around the people (a culprit is an outsider or unknown), or make the option nothing worth mentioning / "
++                     "nothing new yet. If an option does not actually do that, leave it as it is.")
++    if not notes: return out, raw
++    note = "Return the same JSON with the same number of options and the same odds. " + " ".join(notes) + " Change nothing else."
+     out2, raw2 = llm.call_json(role, system, [{"role": "user", "content": msg}, {"role": "assistant", "content": raw}, {"role": "user", "content": note}], max_tokens=max_tokens)
+     opts2 = (out2 or {}).get("options") or []
+     if len(opts2) != len(opts): return out, raw
+@@ -185,7 +227,7 @@
+         if self.e.mode != "live": out = self.mock_options(cat, u)
+         else:
+             msg = self.base_ctx() + "\n" + self.unit_text(cat, u)
+-            out, raw = ask_options(self.e.llm, "world_big" if cat in BIG else "world", [FATE_RULES], msg, 2200)
++            out, raw = ask_options(self.e.llm, "world_big" if cat in BIG else "world", [FATE_RULES], msg, 2200, w)
+         ch, odds, d = roll(self.r, (out or {}).get("options") or [])
+         if not ch: return
+         self.apply(ch, ev, cat, odds, d, (out or {}).get("options") or [])
+@@ -289,7 +331,7 @@
+                        f"SO FAR:\n" + "\n".join("- " + hline for hline in th["history"][-10:]) + "\n"
+                        + (f"WHAT THE PEOPLE INVOLVED DID LATELY:\n" + "\n".join("- " + x for x in lately) + "\n" if lately else "WHAT THE PEOPLE INVOLVED DID LATELY: nothing about this.\n")
+                        + (f"AT {pl['name'].upper()} TODAY: {', '.join(there) or 'nobody from town went'}.\n" if there is not None and pl else ""))
+-                out, raw = ask_options(self.e.llm, "world_big" if th["kind"] in BIG else "world", [THREAD_RULES.replace("{span}", span)], msg, 1800)
++                out, raw = ask_options(self.e.llm, "world_big" if th["kind"] in BIG else "world", [THREAD_RULES.replace("{span}", span)], msg, 1800, w)
+             th["last_step"] = w.day
+             ch, odds, d = roll(self.r, (out or {}).get("options") or [])
+             if not ch: continue
+```
+
+## Fix 5: Season-break rule change: a 'trip' action lets a resident go away for N days and come back on the day, keeping job and home; the world sees who is AWAY FROM TOWN and that everyone else is here.
+
+- Town day 365 (1951-01-01); recorded 2026-11-21T15:44:57+00:00
+- Files: world.py, minds.py, engine.py, fate.py
+- Fingerprint: `bff144e2aa64ceecef79efaccbba9b54d29bd224b415fb40332f7b5e16c96ef1` -> `b1e6019a42a627aeb7104e94c33ffb952c719ff6592a4dd70f65bae88de0f7d2`
+- Diff sha256: `8d2795860707f743cdbbbbc48bae1b0aa70b14c9a5df5d03bd113e35e28d7bca`
+
+```diff
+--- a/nt/world.py
++++ b/nt/world.py
+@@ -521,7 +521,7 @@
+         for pid, rec in list(self.offtown.items()):
+             p = self.people[pid]
+             if not p["alive"]: continue
+-            if rec["kind"] == "jail": continue  # released by the world step when the sentence is served
++            if rec["kind"] in ("jail", "trip"): continue  # released / home again by the world step on the day (fix 5: trips)
+             if rec["kind"] == "army":
+                 if history.at_war(self.date_str):
+                     if self.rng.random() < history.WAR_DEATH_MONTHLY * 30: self.kill(p, "was killed in action overseas", ev); ev("telegram", actors=[i for i in self.households[p["household"]]["members"]], text=f"A Western Union telegram arrives at the {self.households[p['household']]['surname']} house.", importance=10, public=True); continue
+@@ -634,6 +634,14 @@
+             if p["id"] in c["employees"]: c["employees"].remove(p["id"])
+         ev("left_town", actors=[p["id"]], text=f"{p['name']} leaves for {where}.", importance=7, public=True)
+ 
++    def trip(self, p, where, days, ev):
++        """Fix 5 (season break): a resident goes away for a while and comes back (kin, a funeral, business elsewhere). Unlike leave_town they
++        keep their job and home; they are marked away so the town's record knows where they are, and they come home on the day they said."""
++        days = max(1, min(60, int(days or 3)))
++        p["offtown"] = True; p["location"] = "away"
++        self.offtown[p["id"]] = {"kind": "trip", "where": where, "months": 0, "left": self.date_str, "until": self.day + days}
++        ev("left_town", actors=[p["id"]], text=f"{p['name']} goes away to {where} for about {days} day{'s' if days > 1 else ''}.", importance=5, public=True)
++
+     def return_home(self, p, how, ev):
+         p["offtown"] = False; p["location"] = self.households[p["household"]]["place"]; self.offtown.pop(p["id"], None)
+         ev("returned", actors=[p["id"]], text=f"{p['name']} is {how}.", importance=8, public=True)
+--- a/nt/minds.py
++++ b/nt/minds.py
+@@ -26,7 +26,7 @@
+  "feelings": {"<person's full name>": <-20..20>}  (optional: only if something changed how you feel about someone),
+  "rate": {"<number of a NEW memory above>": <1-10, how much it matters to you>},
+  "slots": [ {"slot": "morning"|"midday"|"evening"|"night", "place": "<place id>", "do": "<action>", "target": "<full name, measure id, or null>", "amount": <dollars or null>, "detail": "<what exactly, in your own words>"} x4 ]}
+-Actions the town understands (alphabetical): apply_job, approve_loan, ask_loan, attempt, bank_loan, build, buy, chores, court, declare_candidacy, deny_loan, deposit, dig, eat_at_diner, end_relationship, enforce, explore, farm, fire, fish, give, hire, home, lend, leave_town, pay, phone, propose_marriage, propose_measure, quit_job, repair, school, sell, set_price, set_wage, shop, shop_at, side_work, sleep, start_business, talk, turn_down, visit, vote, withdraw, work, write_letter.
++Actions the town understands (alphabetical): apply_job, approve_loan, ask_loan, attempt, bank_loan, build, buy, chores, court, declare_candidacy, deny_loan, deposit, dig, eat_at_diner, end_relationship, enforce, explore, farm, fire, fish, give, hire, home, lend, leave_town, pay, phone, propose_marriage, propose_measure, quit_job, repair, school, sell, set_price, set_wage, shop, shop_at, side_work, sleep, start_business, talk, trip, turn_down, visit, vote, withdraw, work, write_letter.
+ - talk, phone, court, ask_loan, propose_marriage, end_relationship: target = a person.
+ - vote: target = a candidate's full name or a measure id; detail = "yes" or "no" for a measure.
+ - chores: everyday work around the house, yard, farm or errands; say what in detail.
+@@ -42,6 +42,7 @@
+ - set_wage (if people work for you): amount = dollars a week; target = one worker, or null for everyone.
+ - approve_loan / deny_loan (if you own a bank): target = the applicant; amount; detail = the rate and months.
+ - enforce (if you're the town's lawman): target = the person; detail = which town law.
++- trip: go away for a while and come back (to see kin, a funeral, business elsewhere); detail = where; amount = how many days. leave_town is for leaving for good.
+ - attempt: anything not listed; describe exactly what you do."""
+ 
+ SAY_FORMAT = """Return JSON: {"say": "<exactly what you say out loud, the way you'd really say it>", "aside": "<private thought, optional>", "end": true|false, "deal": null | {"type": "pay"|"lend"|"promise"|"agree"|"refuse", "amount": <number or null>, "terms": "<short>"}}
+--- a/nt/engine.py
++++ b/nt/engine.py
+@@ -425,6 +425,10 @@
+             co = w.companies[p["employer"]]
+             if p["id"] in co["employees"]: co["employees"].remove(p["id"])
+             p["employer"] = None; p.pop("wage_day", None); p["job"] = "out of work"; self.ev("quit", actors=[p["id"], co["owner"]], text=f"{p['name']} quits {co['name']}.", importance=6, public=True)
++        elif do == "trip":  # fix 5 (season break): away for a while, then home; job and home kept
++            try: days = int(amt) if amt else 3
++            except (TypeError, ValueError): days = 3
++            w.trip(p, detail or "visit kin", days, self.ev)
+         elif do == "leave_town":
+             kind = "hollywood" if "hollywood" in detail.lower() else "college" if "college" in detail.lower() else "army" if "army" in detail.lower() or "enlist" in detail.lower() else "city"
+             w.leave_town(p, detail or "the city", self.ev, kind=kind)
+--- a/nt/fate.py
++++ b/nt/fate.py
+@@ -33,7 +33,9 @@
+              "nothing may happen to anyone because of their race, ethnicity or religion; deaths and injuries are told plainly, never gory.\n"
+              "Grounding: RESIDENTS lists everyone who lives in town. Anyone else residents talk about is someone from elsewhere or a rumor that may not be true; "
+              "never treat them as present. Never invent townspeople (a clerk, a storekeeper, an official): a role nobody on the list holds is not filled here. "
+-             "An outsider enters town only through a newcomer operation.")
++             "An outsider enters town only through a newcomer operation. "
++             "Everyone listed in RESIDENTS is in town today: never write them as away, or as writing or calling from somewhere else. "
++             "People listed under AWAY FROM TOWN are not here until they come back.")
+ 
+ FATE_RULES = """You are the world itself in a realistic simulation of a small American town. You never choose what happens; you estimate.
+ Something in the CATEGORY below comes into this town's life today. List 4 to 6 genuinely different, specific things it could realistically be,
+@@ -192,8 +194,16 @@
+         return (f"DATE: {w.date.strftime('%A, %B %d, %Y')} ({w.season}). TOWN: {w.town['name']}, {w.gen['region']} ({w.geo}); population {len(w.living())}. "
+                 f"Main employer: {w.companies['co1']['name']}. The law in town: {', '.join(law) or 'the county sheriff, from the county seat'}.\n"
+                 + (f"TOWN LAWS: {' | '.join(L.law_lines(w, 12))}\n" if L.laws_in_force(w) else "") + routine.fact_sheet(w) + "\n" +
+-                f"RESIDENTS:\n{self.people_list()}\n" + ("OPEN MATTERS IN TOWN:\n" + "\n".join(open_t) + "\n" if open_t else "")
++                f"RESIDENTS:\n{self.people_list()}\n" + self.away_list() + ("OPEN MATTERS IN TOWN:\n" + "\n".join(open_t) + "\n" if open_t else "")
+                 + ("GOING ON IN TOWN:\n" + "\n".join(places) + "\n" if places else ""))
++
++    def away_list(self):
++        """Fix 5 (season break): who is away from town right now, so the world never writes someone in two places."""
++        w = self.w; out = []
++        for pid, rec in w.offtown.items():
++            p = w.people.get(pid)
++            if p and p["alive"]: out.append(f"- {p['name']}: {rec.get('where', 'away')} (since {rec.get('left', '?')})")
++        return ("AWAY FROM TOWN:\n" + "\n".join(out) + "\n") if out else ""
+ 
+     def unit_text(self, cat, unit):
+         w = self.w
+@@ -379,6 +389,7 @@
+         w = self.w
+         for pid, rec in list(w.offtown.items()):
+             if rec.get("kind") == "jail" and rec.get("until", 0) <= w.day and w.people[pid]["alive"]: w.return_home(w.people[pid], "out of the county jail", ev)
++            elif rec.get("kind") == "trip" and rec.get("until", 0) <= w.day and w.people[pid]["alive"]: w.return_home(w.people[pid], f"home again from {rec.get('where', 'the trip')}", ev)
+ 
+     # ------------------------------------------------------------ mock (dry runs only: tests the plumbing, never content)
+     def mock_options(self, cat, u):
+```
+
+## Fix 6: Season-break rule change: the town fact sheet opens with today's date and says nothing after today has happened yet (stops future history leaking in).
+
+- Town day 365 (1951-01-01); recorded 2026-11-21T15:44:57+00:00
+- Files: routine.py
+- Fingerprint: `b1e6019a42a627aeb7104e94c33ffb952c719ff6592a4dd70f65bae88de0f7d2` -> `467da4dda1dd105af3aec7cdc184ad115b0a8f3311d4790ef1532256101ca584`
+- Diff sha256: `f366a3a219154b6f65ce05b224ff91cb509d5cb17d322eb35bb5109d4f6e2d62`
+
+```diff
+--- a/nt/routine.py
++++ b/nt/routine.py
+@@ -170,7 +170,9 @@
+     """What anyone in town knows as plain fact. Shown to the referee and the world step on every call."""
+     t = w.town; off = t["offices"]; nm = lambda i: w.people[i]["name"] if i and i in w.people else None
+     day = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][t["charter"].get("meeting_weekday", 1)]
+-    lines = [f"GOVERNMENT: mayor {nm(off['mayor']) or 'none'}; council: {', '.join(filter(None, (nm(i) for i in off['council']))) or 'none'}. "
++    # fix 6 (season break): in 1950 the world wrote news of the Korean War three weeks before it began
++    lines = [f"TODAY: {w.date.strftime('%A, %B %d, %Y')}. Nothing after today has happened yet: no later event, war, invention, song or news exists for anyone here."]
++    lines += [f"GOVERNMENT: mayor {nm(off['mayor']) or 'none'}; council: {', '.join(filter(None, (nm(i) for i in off['council']))) or 'none'}. "
+              f"The council meets {day} evenings at the town hall; nothing becomes town law unless a measure is proposed and the council votes it through."]
+     biz = []
+     for k, label in (("store", "the general store"), ("diner", "the diner")):
+```
+
+## Fix 7: Season-break rule change: the newcomer operation is only for people who stay; someone passing through, on his way or moving on never becomes a resident.
+
+- Town day 365 (1951-01-01); recorded 2026-11-21T15:44:57+00:00
+- Files: engine.py, fate.py
+- Fingerprint: `467da4dda1dd105af3aec7cdc184ad115b0a8f3311d4790ef1532256101ca584` -> `1d31edf1535a898543dd9e515e497c2265e597facdde8e1b4e1dba7e83cd290d`
+- Diff sha256: `e8716491e1324a7e9645699ebe01cabb76518ad4cfb43438388c7066948d5389`
+
+```diff
+--- a/nt/engine.py
++++ b/nt/engine.py
+@@ -11,6 +11,10 @@
+ 
+ OVERHEAR_QUIRKS = {"nosy", "gossip", "busybody"}
+ 
++
++
++PASSING = re.compile(r"passing through|passes through|just passing|leaves? (town )?the same day|on (his|her) way\b|mov(es|ed|ing) on|stay(s|ed)? (a|one|two|three|a couple of) nights?|traveling (salesman|through)|for the day|overnight only|one night", re.I)
++STAYING = re.compile(r"\b(stays?|settl\w+|moves? (in|here|to town)|to live|takes a room|rents a room|for good|looking for work)\b", re.I)
+ 
+ class Engine:
+     def __init__(self, gen, out_dir, mode="mock", budget=20.0, workers=8):
+@@ -711,6 +715,9 @@
+         from .generator import person
+         nm = str(x.get("name") or "").strip()
+         if not nm or w.by_name(nm): return
++        # fix 7 (season break): someone described as passing through moves on; only people who come to live here become residents
++        if PASSING.search(str(x.get("about") or "")) and not STAYING.search(str(x.get("about") or "")):
++            self.ev("visitor_gone", text=f"{nm} passes through {w.town['name']} and moves on.", importance=2, data={"no_memory": True}); return
+         sn = nm.split()[-1]; hid = max(w.households) + 1
+         w.households[hid] = {"id": hid, "surname": sn, "kind": "newcomer", "members": [], "savings": int(self.r.uniform(5, 300)), "debt": 0, "home": "rented",
+                              "place": f"home_{hid}", "monthly_housing": 30, "withhold_tax": False, "has_tv": False}
+--- a/nt/fate.py
++++ b/nt/fate.py
+@@ -47,6 +47,8 @@
+   Never make a resident the culprit: what a resident does is theirs to do, never yours to write. Who did it is known only to them unless someone saw.
+ - Use exact full names from the list. Never decide what a resident chooses, says, feels, admits or plans: no confessions, admissions, apologies,
+   decisions, promises or secrets told written for them. Only what happens to them and around them.
++- A newcomer operation is only for someone who comes to live in town. A visitor, salesman, peddler or stranger passing through gets no newcomer
++  operation: they come and go, and are gone again.
+ - If it leaves something unsettled that will play out over time (a crime, a stranger who stays, a debt, an injury, a show in town, a quarrel), open a thread.
+ - If it is an event people could go to (a show, a social, a game, a revival), give it a place with hours, days and price.
+ - If money changes hands or goes missing (stolen, lost, found, paid, docked, won), that option must carry a money operation with the exact amount.
+```
+
+## Fix 8: Season-break rule change: a newcomer whose surname looks or sounds like one already in town (but is not the same) gets a second ask to rename.
+
+- Town day 365 (1951-01-01); recorded 2026-11-21T15:44:57+00:00
+- Files: fate.py
+- Fingerprint: `1d31edf1535a898543dd9e515e497c2265e597facdde8e1b4e1dba7e83cd290d` -> `32270e07790d226f7ca2d2d3145b01daca8d5a8578fd82c5f13ec797964676a7`
+- Diff sha256: `b1d5c4ac171e3073597afc15d488839fe7956f114ce4b0c3e5dace797fb683c7`
+
+```diff
+--- a/nt/fate.py
++++ b/nt/fate.py
+@@ -47,6 +47,7 @@
+   Never make a resident the culprit: what a resident does is theirs to do, never yours to write. Who did it is known only to them unless someone saw.
+ - Use exact full names from the list. Never decide what a resident chooses, says, feels, admits or plans: no confessions, admissions, apologies,
+   decisions, promises or secrets told written for them. Only what happens to them and around them.
++- A newcomer's surname must not look or sound like a surname already in town, unless they are kin with the very same surname.
+ - A newcomer operation is only for someone who comes to live in town. A visitor, salesman, peddler or stranger passing through gets no newcomer
+   operation: they come and go, and are gone again.
+ - If it leaves something unsettled that will play out over time (a crime, a stranger who stays, a debt, an injury, a show in town, a quarrel), open a thread.
+@@ -132,6 +133,40 @@
+     return False
+ 
+ 
++# Fix 8 (season break): newcomer Wade Pruett arrived next to Harold Pruitt; viewers mix them up. A newcomer whose surname looks or sounds
++# like one already in town (but isn't the same name, as kin may share) gets one more ask to pick a clearly different surname.
++def soundex(s):
++    s = re.sub(r"[^a-z]", "", s.lower())
++    if not s: return ""
++    codes = {**dict.fromkeys("bfpv", "1"), **dict.fromkeys("cgjkqsxz", "2"), **dict.fromkeys("dt", "3"), "l": "4", **dict.fromkeys("mn", "5"), "r": "6"}
++    out, last = s[0].upper(), codes.get(s[0], "")
++    for ch in s[1:]:
++        c = codes.get(ch, "")
++        if c and c != last: out += c
++        if ch not in "hw": last = c
++    return (out + "000")[:4]
++
++
++def edits(a, b):
++    a, b = a.lower(), b.lower(); prev = list(range(len(b) + 1))
++    for i, x in enumerate(a, 1):
++        cur = [i]
++        for j, y in enumerate(b, 1): cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x != y)))
++        prev = cur
++    return prev[-1]
++
++
++def near_surname(w, name):
++    """The surname already in town that this name's surname looks or sounds like (None if it's clear, or exactly the same name)."""
++    if not w or not name or len(str(name).split()) < 2: return None
++    sn = str(name).split()[-1]; have = {p["name"].split()[-1] for p in w.people.values() if p["alive"]} | {h["surname"] for h in w.households.values()}
++    if sn.lower() in {x.lower() for x in have}: return None
++    for x in sorted(have):
++        d = edits(sn, x)
++        if (d <= 2 and min(len(sn), len(x)) >= 4) or (soundex(sn) == soundex(x) and d <= 3): return x
++    return None
++
++
+ def ask_options(llm, role, system, msg, max_tokens, w=None):
+     """Ask for the options; if any fails a check (money moved with no money operation: fix 3; a resident's own choice written by the world: fix 4),
+     ask once more to fix just that. The odds stay as first estimated. Then the dice roll as before."""
+@@ -149,6 +184,11 @@
+                      "or make a resident the culprit. Residents make their own choices; the world never writes them. Reword the record, truth and memories "
+                      "to say only what happens to and around the people (a culprit is an outsider or unknown), or make the option nothing worth mentioning / "
+                      "nothing new yet. If an option does not actually do that, leave it as it is.")
++    for i, o in enumerate(opts):
++        for x in ((o.get("effects") or []) if isinstance(o, dict) else []):
++            if isinstance(x, dict) and x.get("op") == "newcomer" and near_surname(w, x.get("name")):
++                notes.append(f"Option {i + 1} brings a newcomer named {x.get('name')}, whose surname looks or sounds like {near_surname(w, x.get('name'))}, already in town. "
++                             "Give them a clearly different surname everywhere in that option.")
+     if not notes: return out, raw
+     note = "Return the same JSON with the same number of options and the same odds. " + " ".join(notes) + " Change nothing else."
+     out2, raw2 = llm.call_json(role, system, [{"role": "user", "content": msg}, {"role": "assistant", "content": raw}, {"role": "user", "content": note}], max_tokens=max_tokens)
+```
+
+## Fix 9: Season-break rule change: outside-mind calls give up after 30 seconds in all and fall back to Claude (logged; the health stop then pauses the run) instead of hanging until a 504.
+
+- Town day 365 (1951-01-01); recorded 2026-11-21T15:44:58+00:00
+- Files: llm.py
+- Fingerprint: `32270e07790d226f7ca2d2d3145b01daca8d5a8578fd82c5f13ec797964676a7` -> `1aa637e880fd34d3465ad45b4a9c15a38d7767f782cce2447e74dadbb7ae78bb`
+- Diff sha256: `38d47bdda5be548f987b7522d2f2b532a6aef3bd6a71404c37b0adcee6bc53a9`
+
+```diff
+--- a/nt/llm.py
++++ b/nt/llm.py
+@@ -9,6 +9,7 @@
+ # clerk and editor stay on Claude. OpenRouter reports each call's real cost, so the budget cap covers these too.
+ OR_KEY_PATH = os.path.expanduser("~/.secrets/openrouter_key")
+ OR_API = "https://openrouter.ai/api/v1/chat/completions"
++OUTSIDE_GIVE_UP_S = 30  # fix 9: seconds to wait for an outside model before falling back to Claude
+ OUTSIDE = {"gpt": "openai/gpt-6.2-sol", "gemini": "google/gemini-4-carbon", "deepseek": "deepseek/deepseek-v4.1-flash-1017"}
+ OR_REASON = {}  # model -> the reasoning setting it accepts (some can't turn thinking off; then the least, hidden)
+ NO_THINK = {"resident", "talk", "referee", "referee_big", "world", "world_big", "law"}
+@@ -107,10 +108,15 @@
+         msgs = [{"role": "system", "content": "\n\n".join(system)}] + [{"role": m["role"], "content": flat(m["content"])} for m in messages]
+         body = {"model": model, "messages": msgs, "max_tokens": max_tokens, "temperature": temperature, "usage": {"include": True},
+                 "reasoning": OR_REASON.get(model, {"enabled": False})}
++        # fix 9 (season break): give up after about 30 seconds in all and fall back to Claude (logged), instead of hanging for minutes
++        # until a 504 (8 times in Q2). Odds and dice are unaffected: this only decides how long to wait for the outside model.
++        t_end = time.time() + OUTSIDE_GIVE_UP_S
+         for attempt in range(5):
++            left = t_end - time.time()
++            if left < 3: raise RuntimeError(f"OpenRouter gave no answer within {OUTSIDE_GIVE_UP_S}s")
+             req = urllib.request.Request(OR_API, data=json.dumps(body).encode(), headers={"Authorization": f"Bearer {self.or_key}", "Content-Type": "application/json", "X-Title": "Nobody's Town"})
+             try:
+-                with urllib.request.urlopen(req, timeout=120) as resp: out = json.loads(resp.read())
++                with urllib.request.urlopen(req, timeout=left) as resp: out = json.loads(resp.read())
+                 if out.get("error"): raise RuntimeError(str(out["error"])[:200])
+                 text = (out["choices"][0]["message"].get("content") or "")
+                 u = out.get("usage", {}) or {}
+@@ -122,10 +128,10 @@
+                 msg = e.read().decode(errors="replace")[:300]
+                 if e.code == 400 and "mandatory" in msg and body["reasoning"].get("enabled") is False:
+                     OR_REASON[model] = body["reasoning"] = {"effort": "minimal", "exclude": True}; continue
+-                if e.code in (408, 429, 500, 502, 503, 529) and attempt < 4: time.sleep(2 ** attempt + 1); continue
++                if e.code in (408, 429, 500, 502, 503, 504, 529) and attempt < 4 and t_end - time.time() > 2 ** attempt + 4: time.sleep(2 ** attempt + 1); continue
+                 raise RuntimeError(f"OpenRouter {e.code}: {msg}")
+             except (urllib.error.URLError, TimeoutError, KeyError, IndexError):
+-                if attempt < 4: time.sleep(2 ** attempt + 1); continue
++                if attempt < 4 and t_end - time.time() > 2 ** attempt + 4: time.sleep(2 ** attempt + 1); continue
+                 raise
+         raise RuntimeError("OpenRouter retries exhausted")
+```
+
+## Fix 10: Season-break rule change: an option that repeats a record from the last 30 days or from the thread's history gets a second ask (no new dice), so the world does not write the same event twice.
+
+- Town day 365 (1951-01-01); recorded 2026-11-21T15:44:58+00:00
+- Files: fate.py
+- Fingerprint: `1aa637e880fd34d3465ad45b4a9c15a38d7767f782cce2447e74dadbb7ae78bb` -> `f218f07ebe11d811029e8335083325dcdb10e1d2840acc7bae0e77ea0cc5128d`
+- Diff sha256: `5fb0db1c4c9350e86733620b2f81f519dcbbaf4fd570e15caffa24c101a2665d`
+
+```diff
+--- a/nt/fate.py
++++ b/nt/fate.py
+@@ -73,7 +73,7 @@
+ Below is an unsettled matter in town: the whole private truth, what has happened so far, and what the people involved have done lately.
+ Time has passed ({span}). List 3 to 5 genuinely different things that could realistically happen in that time, each with your honest estimate of
+ how often it would go that way in real life (percent, summing to 100). The town's dice picks one.
+-- "Nothing new yet" is usually the most likely; always include it.
++- "Nothing new yet" is usually the most likely; always include it. Never repeat anything already under SO FAR: it has happened.
+ - Take what residents did as given. Never decide what a resident chooses, says or feels; only what happens around them and as a result.
+ - Never write a resident confessing, admitting, apologizing, deciding, agreeing, promising or telling a secret: that happens only if they did it
+   themselves (see WHAT THE PEOPLE INVOLVED DID LATELY). Even when the private truth says a resident did something, it comes out only through what
+@@ -167,7 +167,25 @@
+     return None
+ 
+ 
+-def ask_options(llm, role, system, msg, max_tokens, w=None):
++# Fix 10 (season break): in Q3 the world wrote Tommy's confession on Jul 16 and again on Jul 23. An option that says nearly the same thing as
++# something already on the record gets one more ask to say what is new instead.
++SAME_STOP = {"the", "a", "an", "of", "and", "in", "on", "at", "to", "for", "from", "with", "his", "her", "he", "she", "they", "their", "that", "this",
++             "was", "is", "it", "as", "by", "but", "had", "has", "who", "about", "after", "into", "out", "up", "again", "still", "s"}
++
++
++def words(t): return {x for x in re.findall(r"[a-z0-9$']+", str(t).lower()) if x not in SAME_STOP and len(x) > 2}
++
++
++def repeats(o, seen):
++    """True if this option's record says nearly what an earlier record already said (a 'nothing new' option never counts)."""
++    rec = str(o.get("record") or o.get("text") or "")
++    if not seen or re.search(r"nothing (new|out of the ordinary|else|worth|unusual|much)", rec, re.I): return False
++    a = words(rec)
++    if len(a) < 6: return False
++    return any(len(a & b) / len(a) >= 0.6 for b in (words(x) for x in seen) if b)
++
++
++def ask_options(llm, role, system, msg, max_tokens, w=None, seen=()):
+     """Ask for the options; if any fails a check (money moved with no money operation: fix 3; a resident's own choice written by the world: fix 4),
+     ask once more to fix just that. The odds stay as first estimated. Then the dice roll as before."""
+     out, raw = llm.call_json(role, system, [{"role": "user", "content": msg}], max_tokens=max_tokens)
+@@ -184,6 +202,10 @@
+                      "or make a resident the culprit. Residents make their own choices; the world never writes them. Reword the record, truth and memories "
+                      "to say only what happens to and around the people (a culprit is an outsider or unknown), or make the option nothing worth mentioning / "
+                      "nothing new yet. If an option does not actually do that, leave it as it is.")
++    rp = [i + 1 for i, o in enumerate(opts) if isinstance(o, dict) and repeats(o, seen)]
++    if rp:
++        notes.append(f"Option{'s' if len(rp) > 1 else ''} {num(rp)} repeat{'' if len(rp) > 1 else 's'} something already on the town's record. "
++                     "Something that already happened does not happen again: replace each with what could realistically be new now, or with nothing new.")
+     for i, o in enumerate(opts):
+         for x in ((o.get("effects") or []) if isinstance(o, dict) else []):
+             if isinstance(x, dict) and x.get("op") == "newcomer" and near_surname(w, x.get("name")):
+@@ -279,7 +301,8 @@
+         if self.e.mode != "live": out = self.mock_options(cat, u)
+         else:
+             msg = self.base_ctx() + "\n" + self.unit_text(cat, u)
+-            out, raw = ask_options(self.e.llm, "world_big" if cat in BIG else "world", [FATE_RULES], msg, 2200, w)
++            seen = [x["text"] for x in self.e.events[-600:] if x["kind"] == "world" and x["day"] >= w.day - 30]
++            out, raw = ask_options(self.e.llm, "world_big" if cat in BIG else "world", [FATE_RULES], msg, 2200, w, seen)
+         ch, odds, d = roll(self.r, (out or {}).get("options") or [])
+         if not ch: return
+         self.apply(ch, ev, cat, odds, d, (out or {}).get("options") or [])
+@@ -383,7 +406,7 @@
+                        f"SO FAR:\n" + "\n".join("- " + hline for hline in th["history"][-10:]) + "\n"
+                        + (f"WHAT THE PEOPLE INVOLVED DID LATELY:\n" + "\n".join("- " + x for x in lately) + "\n" if lately else "WHAT THE PEOPLE INVOLVED DID LATELY: nothing about this.\n")
+                        + (f"AT {pl['name'].upper()} TODAY: {', '.join(there) or 'nobody from town went'}.\n" if there is not None and pl else ""))
+-                out, raw = ask_options(self.e.llm, "world_big" if th["kind"] in BIG else "world", [THREAD_RULES.replace("{span}", span)], msg, 1800, w)
++                out, raw = ask_options(self.e.llm, "world_big" if th["kind"] in BIG else "world", [THREAD_RULES.replace("{span}", span)], msg, 1800, w, [hl.split(": ", 1)[-1] for hl in th["history"]])
+             th["last_step"] = w.day
+             ch, odds, d = roll(self.r, (out or {}).get("options") or [])
+             if not ch: continue
+```
+
+## Fix 11: Season-break rule change: residents 18 and over see the posted election notice and who has declared during the 30 days before an election.
+
+- Town day 365 (1951-01-01); recorded 2026-11-21T15:44:58+00:00
+- Files: minds.py
+- Fingerprint: `f218f07ebe11d811029e8335083325dcdb10e1d2840acc7bae0e77ea0cc5128d` -> `e4902e71da725f731a6f9bb2ea9ad6e699bcadca23e100386204d69963f734c4`
+- Diff sha256: `373c4bd9cdbb1f9032b5b7c269d758fbcc048d898ebd6701920549d362eb09a4`
+
+```diff
+--- a/nt/minds.py
++++ b/nt/minds.py
+@@ -217,6 +217,11 @@
+     if p.get("items"): notes.append("You have: " + "; ".join(it["desc"] for it in p["items"]) + ".")
+     if p["age"] < 18 and w.date.weekday() < 5 and p["education"] == "in school": notes.append("It's a school day.")
+     for e in t["elections"]:
++        if e["status"] == "scheduled" and p["age"] >= 18:  # fix 11 (season break): the posted notice is public fact, as election day is
++            import datetime as _dt
++            when = (w.date + _dt.timedelta(days=e["day"] - w.day)).strftime("%A, %B %d")
++            notes.append(f"Notice is posted at the town hall: {t['name']} elects a mayor and a council of three on {when}. Anyone {t['charter']['voting_age']} or over may put their name in."
++                         + (f" Running so far: {', '.join(w.name(c) + ' (' + e['cand_office'][c] + ')' for c in e['candidates'])}." if e["candidates"] else " Nobody has put their name in yet."))
+         if e["status"] == "open": notes.append(f"Today is {'the runoff' if e.get('runoff') else 'election day'}. On the ballot: {', '.join(w.name(c) + ' (' + e['cand_office'][c] + ')' for c in e['candidates']) or 'nobody yet'}. Polls close tonight.")
+     if in_office and w.date.weekday() == t["charter"].get("meeting_weekday", 1):
+         opens = [m for m in t["motions"] if m["status"] == "open"]
+```

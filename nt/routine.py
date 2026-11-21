@@ -170,7 +170,9 @@ def fact_sheet(w):
     """What anyone in town knows as plain fact. Shown to the referee and the world step on every call."""
     t = w.town; off = t["offices"]; nm = lambda i: w.people[i]["name"] if i and i in w.people else None
     day = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][t["charter"].get("meeting_weekday", 1)]
-    lines = [f"GOVERNMENT: mayor {nm(off['mayor']) or 'none'}; council: {', '.join(filter(None, (nm(i) for i in off['council']))) or 'none'}. "
+    # fix 6 (season break): in 1950 the world wrote news of the Korean War three weeks before it began
+    lines = [f"TODAY: {w.date.strftime('%A, %B %d, %Y')}. Nothing after today has happened yet: no later event, war, invention, song or news exists for anyone here."]
+    lines += [f"GOVERNMENT: mayor {nm(off['mayor']) or 'none'}; council: {', '.join(filter(None, (nm(i) for i in off['council']))) or 'none'}. "
              f"The council meets {day} evenings at the town hall; nothing becomes town law unless a measure is proposed and the council votes it through."]
     biz = []
     for k, label in (("store", "the general store"), ("diner", "the diner")):

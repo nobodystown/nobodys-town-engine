@@ -26,7 +26,7 @@ PLAN_FORMAT = """Live your day as yourself. Return JSON:
  "feelings": {"<person's full name>": <-20..20>}  (optional: only if something changed how you feel about someone),
  "rate": {"<number of a NEW memory above>": <1-10, how much it matters to you>},
  "slots": [ {"slot": "morning"|"midday"|"evening"|"night", "place": "<place id>", "do": "<action>", "target": "<full name, measure id, or null>", "amount": <dollars or null>, "detail": "<what exactly, in your own words>"} x4 ]}
-Actions the town understands (alphabetical): apply_job, approve_loan, ask_loan, attempt, bank_loan, build, buy, chores, court, declare_candidacy, deny_loan, deposit, dig, eat_at_diner, end_relationship, enforce, explore, farm, fire, fish, give, hire, home, lend, leave_town, pay, phone, propose_marriage, propose_measure, quit_job, repair, school, sell, set_price, set_wage, shop, shop_at, side_work, sleep, start_business, talk, turn_down, visit, vote, withdraw, work, write_letter.
+Actions the town understands (alphabetical): apply_job, approve_loan, ask_loan, attempt, bank_loan, build, buy, chores, court, declare_candidacy, deny_loan, deposit, dig, eat_at_diner, end_relationship, enforce, explore, farm, fire, fish, give, hire, home, lend, leave_town, pay, phone, propose_marriage, propose_measure, quit_job, repair, school, sell, set_price, set_wage, shop, shop_at, side_work, sleep, start_business, talk, trip, turn_down, visit, vote, withdraw, work, write_letter.
 - talk, phone, court, ask_loan, propose_marriage, end_relationship: target = a person.
 - vote: target = a candidate's full name or a measure id; detail = "yes" or "no" for a measure.
 - chores: everyday work around the house, yard, farm or errands; say what in detail.
@@ -42,6 +42,7 @@ Actions the town understands (alphabetical): apply_job, approve_loan, ask_loan, 
 - set_wage (if people work for you): amount = dollars a week; target = one worker, or null for everyone.
 - approve_loan / deny_loan (if you own a bank): target = the applicant; amount; detail = the rate and months.
 - enforce (if you're the town's lawman): target = the person; detail = which town law.
+- trip: go away for a while and come back (to see kin, a funeral, business elsewhere); detail = where; amount = how many days. leave_town is for leaving for good.
 - attempt: anything not listed; describe exactly what you do."""
 
 SAY_FORMAT = """Return JSON: {"say": "<exactly what you say out loud, the way you'd really say it>", "aside": "<private thought, optional>", "end": true|false, "deal": null | {"type": "pay"|"lend"|"promise"|"agree"|"refuse", "amount": <number or null>, "terms": "<short>"}}
@@ -216,6 +217,11 @@ def today_block(w, p):
     if p.get("items"): notes.append("You have: " + "; ".join(it["desc"] for it in p["items"]) + ".")
     if p["age"] < 18 and w.date.weekday() < 5 and p["education"] == "in school": notes.append("It's a school day.")
     for e in t["elections"]:
+        if e["status"] == "scheduled" and p["age"] >= 18:  # fix 11 (season break): the posted notice is public fact, as election day is
+            import datetime as _dt
+            when = (w.date + _dt.timedelta(days=e["day"] - w.day)).strftime("%A, %B %d")
+            notes.append(f"Notice is posted at the town hall: {t['name']} elects a mayor and a council of three on {when}. Anyone {t['charter']['voting_age']} or over may put their name in."
+                         + (f" Running so far: {', '.join(w.name(c) + ' (' + e['cand_office'][c] + ')' for c in e['candidates'])}." if e["candidates"] else " Nobody has put their name in yet."))
         if e["status"] == "open": notes.append(f"Today is {'the runoff' if e.get('runoff') else 'election day'}. On the ballot: {', '.join(w.name(c) + ' (' + e['cand_office'][c] + ')' for c in e['candidates']) or 'nobody yet'}. Polls close tonight.")
     if in_office and w.date.weekday() == t["charter"].get("meeting_weekday", 1):
         opens = [m for m in t["motions"] if m["status"] == "open"]
