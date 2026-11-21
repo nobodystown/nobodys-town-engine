@@ -54,6 +54,17 @@ def load_run(run_dir):
     return ev, dl, sn
 
 
+def load_cuts(run_dir):
+    """Continuity cuts (Aaron, Nov 20): records that contradict the town's own record never reach the edit.
+    editor_cuts.json in the run folder or the folder above it: {"cut_events": [{"id": n, "reason": "..."}], "notes": ["..."]}.
+    This only decides what airs; it never changes the town."""
+    for d in (run_dir, os.path.dirname(os.path.abspath(run_dir))):
+        f = os.path.join(d, "editor_cuts.json")
+        if os.path.exists(f):
+            c = json.load(open(f)); return {x["id"] for x in c.get("cut_events", [])}, list(c.get("notes", []))
+    return set(), []
+
+
 def find_mattered(e, dl):
     """A discovery matters only if the finder talked about it (or traded it) afterwards."""
     words = {w.strip(".,").lower() for w in e["text"].split(" while ")[0].split() if len(w) > 4} - STOP
@@ -192,6 +203,8 @@ def ledger(ev, sn, gen, notes=()):
 
 def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minutes=13, leads=2):
     ev, dl, sn = load_run(run_dir)
+    cut, cut_notes = load_cuts(run_dir)
+    ev = [e for e in ev if e["id"] not in cut]  # continuity cuts never air, as scenes or as news overlays
     names = lambda pid: next((s["people"][str(pid)]["name"] for s in reversed(sn) if str(pid) in s["people"]), "?")
     hh_name = lambda hid: sn[-1]["households"][str(hid)]["surname"] if str(hid) in sn[-1]["households"] else "?"
     ts = thread_scores(ev, dl, sn)
@@ -207,7 +220,7 @@ def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minu
                  f"(roughly {target_minutes * 9} dialogue lines in total; the narrator speaks less than a quarter of the words). "
                  f"Use at most {max(4, round(target_minutes * 1.8))} scenes: fewer, fuller scenes (3-4 lines each) beat many short ones. "  # Aaron, Nov 18: too many short scenes
                  f"The year held {len(dl)} conversations; the {len(dl_pick)} strongest are below, with their original numbers.",
-                 "RESIDENTS WHO WERE IN THE MOST SCENES (candidates, not a ranking): " + "; ".join(f"{names(pid)} ({sn[-1]['people'][str(pid)]['age']}, {sn[-1]['people'][str(pid)]['job'] or 'no job'})" for pid, _ in act.most_common(12)), "", "EVENTS:"]
+                 "RESIDENTS WHO WERE IN THE MOST SCENES (candidates, not a ranking): " + "; ".join(f"{names(pid)} ({sn[-1]['people'][str(pid)]['age']}, {sn[-1]['people'][str(pid)]['job'] or 'no job'})" for pid, _ in act.most_common(12)), ""] + (["CONTINUITY NOTES (from the town's own record; follow them):"] + [f"- {x}" for x in cut_notes] + [""] if cut_notes else []) + ["EVENTS:"]
         for e in ev_pick:
             lines.append(f"[{e['id']}] {e['date']} {e['slot']} ({e['kind']}{', sensitive' if e['sensitive'] else ''}): {e['text']}")
         lines += ["", "DIALOGUES:"]
