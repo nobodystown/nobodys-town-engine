@@ -94,7 +94,7 @@ def thumbnail(scene_img, portrait_img, headline, episode=None, sub=None):
         d.text((48 + 6, y + 6), row, font=f, fill=INK); d.text((48, y), row, font=f, fill=BUTTER if k == 0 else CREAM); y += 150
     if sub: d.text((52, y + 10), sub, font=F(POP, 40), fill=CREAM, stroke_width=4, stroke_fill=INK)
     if episode:
-        b = f"EP {episode}"; fb = F(POP, 40); bw = d.textlength(b, font=fb)
+        b = " · ".join(episode.split(" · ")[:2]) if isinstance(episode, str) else f"EP {episode}"; fb = F(POP, 40); bw = d.textlength(b, font=fb)
         d.rounded_rectangle([40, H - 100, 40 + bw + 40, H - 36], 12, fill=RED); d.text((60, H - 96), b, font=fb, fill=CREAM)
     wm = watermark(110); im.paste(wm, (W - 140, 20), wm)
     return im
@@ -104,7 +104,8 @@ def title_card(town, episode, title, pop, premise=None):
     """Episode title card: the welcome sign with the town's REAL population."""
     W, H = 1280, 720; im = night_scene(W, H, 11); d = ImageDraw.Draw(im)
     s = sign(560, pop, town); im.paste(s, ((W - s.width) // 2, 70), s)
-    ep = f"EPISODE {episode}"; f = F(POP, 36); d.text(((W - d.textlength(ep, font=f)) / 2, 500), ep, font=f, fill=BUTTER)
+    ep = episode if isinstance(episode, str) else f"EPISODE {episode}"; f = F(POP, 36)  # quarterly parts carry a label: "1950 · PART 1 · WINTER"
+    if isinstance(episode, str): title = title.split(" | ")[0]  # the part suffix is already on the label line; d.text(((W - d.textlength(ep, font=f)) / 2, 500), ep, font=f, fill=BUTTER)
     # the title always fits: shrink to fit, wrap to two lines if needed (never runs off the screen)
     size = 44; maxw = W - 160
     while size > 26:

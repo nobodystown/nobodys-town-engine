@@ -226,12 +226,35 @@ def cmd_season(n, budget, minutes=None, workers=None):
     print(json.dumps({"episode": n, "day": e.w.day, "end": end, "status": stop, "spent_this_session": round(e.llm.meter.spent, 3)}))
 
 
-def cmd_episode(n):
-    from .editor import build_episode
+def quarter_span(run, span, part):
+    """Calendar quarters of the year (Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec) from the snapshots' own dates: 1950 = days 0-89, 90-180, 181-272, 273-364."""
+    days = [json.loads(l) for l in open(os.path.join(run, "snapshots.jsonl"))]
+    days = [(d["day"], int(d["date"][5:7])) for d in days if span["first_day"] <= d["day"] <= span["last_day"]]
+    q = [day for day, m in days if (m - 1) // 3 + 1 == part]
+    if not q: sys.exit(f"STOPPED: no days recorded for part {part}.")
+    return {"first_day": min(q), "last_day": max(q)}
+
+
+def cmd_episode(n, part=None):
+    """One episode of year n, or (quarterly episodes, Nov 21) one part of it: --part 1-4 -> OFFICIAL/ep<n>_p<k>/, ~11 minutes."""
+    from .editor import build_episode, SEASON_OF_PART
     from . import assemble
     gen = json.load(open(os.path.join(OFFICIAL, "world.json"))); run = os.path.join(OFFICIAL, "run")
     span = json.load(open(os.path.join(run, f"season_{n}.json")))
-    sub = os.path.join(OFFICIAL, f"ep{n}"); os.makedirs(sub, exist_ok=True)
+    prev = None
+    if part:
+        span = quarter_span(run, span, part)
+        sub = os.path.join(OFFICIAL, f"ep{n}_p{part}")
+        pp = os.path.join(OFFICIAL, f"ep{n}_p{part - 1}", f"episode_{n}_plan.json")
+        if part > 1:
+            if not os.path.exists(pp): sys.exit(f"STOPPED: part {part} needs part {part - 1}'s plan for the 'previously' and leads ({pp}).")
+            prev = json.load(open(pp))
+    else:
+        sub = os.path.join(OFFICIAL, f"ep{n}")
+    os.makedirs(sub, exist_ok=True)
+    # one permanent voice per resident across every episode and part (Nov 21): the town-level map lives in OFFICIAL/voice_map.json
+    import shutil
+    if os.path.exists(os.path.join(OFFICIAL, "voice_map.json")): shutil.copy(os.path.join(OFFICIAL, "voice_map.json"), os.path.join(sub, "voice_map.json"))
     # slice this season's records into the episode folder
     for f in ("events.jsonl", "dialogues.jsonl", "snapshots.jsonl"):
         rows = [l for l in open(os.path.join(run, f)) if span["first_day"] <= json.loads(l)["day"] <= span["last_day"]]
@@ -251,11 +274,18 @@ def cmd_episode(n):
         _orig = _ur.urlopen
         def _urlopen_long(req, *a, timeout=None, **kw): return _orig(req, *a, timeout=max(timeout or 0, 900), **kw)
         _urlopen_long._long = True; _ur.urlopen = _urlopen_long
-    plan = build_episode(sub, gen, "live", llm, n)
+    if part: plan = build_episode(sub, gen, "live", llm, n, target_minutes=11, part=part, prev=prev)
+    else: plan = build_episode(sub, gen, "live", llm, n)
     if not plan.get("scenes") or not plan.get("title"): sys.exit(f"STOPPED: the editor returned no usable plan (cost ${llm.meter.summary()['usd']}); nothing rendered.")
+    if part:  # on-screen label for the cards and thumbnail badge; the plan file keeps the episode number
+        year = gen_year = json.loads(open(os.path.join(sub, "snapshots.jsonl")).readline())["date"][:4]
+        plan["episode"] = f"PART {part} · {SEASON_OF_PART[part].upper()} {year}"
     sn = [json.loads(l) for l in open(os.path.join(sub, "snapshots.jsonl"))]
     T = assemble.build_timeline(plan, sn, gen); assemble.render(T, os.path.join(sub, f"episode_{n}.mp4"), gen["seed"], gen)
+    if part: json.dump(plan, open(os.path.join(sub, f"episode_{n}_plan.json"), "w"), indent=1, default=str)  # keep the part label for nt.mix / nt.tts
     assemble.write_outputs(T, plan, sn, gen, sub, n)  # voices by role, cast, narrator script, SRT, thumbnail
+    shutil.copy(os.path.join(sub, "voice_map.json"), os.path.join(OFFICIAL, "voice_map.json"))  # newcomers keep their voice from now on
+    shutil.copy(os.path.join(OFFICIAL, "world.json"), os.path.join(sub, "world.json"))  # nt.mix reads world.json from the episode folder
     print(json.dumps({"title": plan.get("title"), "seconds": T.t, "editor_cost": llm.meter.summary()["usd"]}, indent=1))
 
 
@@ -266,5 +296,5 @@ if __name__ == "__main__":
     {"ping": cmd_ping, "smoke": cmd_smoke, "roll": cmd_roll}.get(a[0], lambda: None)()
     if a[0] == "season": cmd_season(int(a[1]), budget, float(a[a.index("--minutes") + 1]) if "--minutes" in a else None,
                                        int(a[a.index("--workers") + 1]) if "--workers" in a else None)
-    if a[0] == "episode": cmd_episode(int(a[1]))
+    if a[0] == "episode": cmd_episode(int(a[1]), int(a[a.index("--part") + 1]) if "--part" in a else None)
     if a[0] == "fix": cmd_fix(a[1], a[a.index("--base") + 1])

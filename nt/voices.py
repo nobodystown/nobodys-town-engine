@@ -121,7 +121,7 @@ def ts(x):
 
 
 def narrator_script(voices, title, episode):
-    rows = [f"NOBODY'S TOWN, EPISODE {episode}: {title}", "NARRATOR SCRIPT (read in order; timecodes show where each line lands in the cut)", ""]
+    rows = [f"NOBODY'S TOWN, {episode if isinstance(episode, str) else f'EPISODE {episode}'}: {title}", "NARRATOR SCRIPT (read in order; timecodes show where each line lands in the cut)", ""]
     for v in voices:
         if v["role"] == "narrator": rows += [f"[{ts(v['start'])}]  ({v['max_seconds']:.0f}s window)", v["text"], ""]
     return "\n".join(rows)

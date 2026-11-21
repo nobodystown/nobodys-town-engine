@@ -230,13 +230,56 @@ def world_authored_guilt(ev, sn):
     return out
 
 
+def prev_lines(prev):
+    """What the previous part aired (its own plan, all real): for a true 'previously' and for lead continuity. Never steers the town."""
+    L = ["PREVIOUS PART (already aired; for the 'previously' and continuity only, do not reuse its scenes):", f"- Title: {prev.get('title', '')}"]
+    L += [f"- Lead: {l['name']}: {l.get('want', '')}" for l in prev.get("leads", [])]
+    if prev.get("closing"): L.append(f"- It closed on: {prev['closing']}")
+    if prev.get("teaser"): L.append(f"- Its teaser: {prev['teaser']}")
+    L += ["LEADS: prefer the SAME leads as the previous part so viewers can follow them through the year. Swap one only if their story "
+          "in this quarter is clearly thin and another resident's story clearly takes over; then say so in the 'previously'.", ""]
+    return L
+
+
 def last_days(dl, n_days=7, k=10):
     if not dl: return []
     end = dl[-1]["day"]
     return sorted(sorted((i for i, d in enumerate(dl) if d["day"] > end - n_days), key=lambda i: -dl_score(dl[i]))[:k])
 
 
-def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minutes=13, leads=2):
+SEASON_OF_PART = {1: "Winter", 2: "Spring", 3: "Summer", 4: "Fall"}
+
+
+def part_rules(rules, part, year):
+    """Quarterly episodes (Aaron, Nov 21): the same editor rules, scoped to one quarter of the year. Wording swaps only; the
+    year-cut rules stay byte-for-byte the same when part is None, so the 1950 full-year recap is reproducible."""
+    season = SEASON_OF_PART[part]
+    swaps = [
+        ("ONE EPISODE = ONE YEAR of the town's life. You are given the year's biggest events",
+         f"ONE EPISODE = ONE QUARTER of the year: this is {year}, Part {part} of 4 ({season}). You are given the quarter's biggest events"),
+        ("carry the most HUMAN story across this year", "carry the most HUMAN story across this quarter"),
+        ("YEAR SHAPE\n- Cold open on the single biggest moment of the year (it may come from late in the year), then after the title tell the year IN ORDER, spring to winter or however the year runs. Let the seasons pass in the narration with plain time words (that spring, by midsummer, come the first snow) rather than dates.\n- Spread the scenes across the whole year; don't spend half the episode on one month.",
+         "QUARTER SHAPE\n- Cold open on the single biggest moment of the quarter (it may come from late in the quarter), then after the title tell the quarter IN ORDER. Let the weeks pass in the narration with plain time words (that first week, by the end of the month, a fortnight on) rather than dates.\n- Spread the scenes across all three months; don't spend half the episode on one week."),
+        ("where it's left at year's end", "where it's left at the quarter's end"),
+        ("- Closing scene: end the year on a real moment. Pick ONE conversation from LAST DAYS OF THE YEAR",
+         "- Closing scene: end the quarter on a real moment. Pick ONE conversation from LAST DAYS OF THE QUARTER"),
+        ("how the year ends for them", "how the quarter ends for them"),
+        ("most surprising TRUE outcome of the year", "most surprising TRUE outcome of the quarter"),
+        ('A good shape: "{pop} AI People, One Year: <true outcome>" or "<lead> Bet Everything on <true thing>".'.replace("{pop}", "%POP%"),
+         f'The title MUST end with " | {year}, Part {part}: {season}" (the stakes part before it stays under 40 characters). A good shape: "<lead> Bet Everything on <true thing> | {year}, Part {part}: {season}".'),
+        ("never a claim the year doesn't support", "never a claim the quarter doesn't support"),
+        ("The year's big public events (a fire", "The quarter's big public events (a fire"),
+        ('"teaser": "<one true sentence about something still unresolved>"', '"teaser": "<one true sentence about something still unresolved that carries into the next part>"'),
+        ("<index from LAST DAYS OF THE YEAR>", "<index from LAST DAYS OF THE QUARTER>"),
+    ]
+    for a, b in swaps:
+        a2 = a.replace("%POP%", rules.split(" AI People, One Year")[0].rsplit('"', 1)[-1]) if "%POP%" in a else a
+        if a2 not in rules: raise ValueError(f"part_rules: rule text changed, can't find: {a2[:60]}")
+        rules = rules.replace(a2, b)
+    return rules
+
+
+def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minutes=13, leads=2, part=None, prev=None):
     ev, dl, sn = load_run(run_dir)
     cut, cut_notes = load_cuts(run_dir)
     ev = [e for e in ev if e["id"] not in cut]  # continuity cuts never air, as scenes or as news overlays
@@ -250,14 +293,17 @@ def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minu
         act = activity(dl, kept)
         ev_pick, dl_pick = prefilter(ev, dl, sn, kept, act)
         pop = sum(1 for p in sn[0]["people"].values() if p["alive"] and not p["offtown"])
+        first = episode_no == 1 and (part or 1) == 1  # only the very first part of the very first year gets the welcome
         rules = EDITOR_RULES.format(leads_rule="ONE LEAD: one resident, for the whole episode" if leads == 1 else "TWO LEADS: two residents, ideally whose lives are linked or cross",
-                                    welcome_rule=WELCOME_EP1 if episode_no == 1 else WELCOME_LATER, pop=pop,
-                                    welcome_field="2-3 sentence welcome to the town and the lead(s)" if episode_no == 1 else "1-2 sentence previously, or empty")
-        lines = [f"TOWN: {gen['name']}, {gen['region']}. Episode {episode_no}. Period: {sn[0]['date']} to {sn[-1]['date']} (one year). Target length: about {target_minutes} minutes "
+                                    welcome_rule=WELCOME_EP1 if first else WELCOME_LATER, pop=pop,
+                                    welcome_field="2-3 sentence welcome to the town and the lead(s)" if first else "1-2 sentence previously, or empty")
+        year = sn[0]["date"][:4]
+        if part: rules = part_rules(rules, part, year)
+        lines = [f"TOWN: {gen['name']}, {gen['region']}. Episode {episode_no}. Period: {sn[0]['date']} to {sn[-1]['date']} ({f"one quarter: {sn[0]['date'][:4]}, Part {part} of 4, {SEASON_OF_PART[part]}" if part else "one year"}). Target length: about {target_minutes} minutes "
                  f"(roughly {target_minutes * 9} dialogue lines in total; the narrator speaks less than a quarter of the words). "
                  f"Use at most {max(4, round(target_minutes * 1.8))} scenes: fewer, fuller scenes (3-4 lines each) beat many short ones. "  # Aaron, Nov 18: too many short scenes
-                 f"The year held {len(dl)} conversations; the {len(dl_pick)} strongest are below, with their original numbers.",
-                 "RESIDENTS WHO WERE IN THE MOST SCENES (candidates, not a ranking): " + "; ".join(f"{names(pid)} ({sn[-1]['people'][str(pid)]['age']}, {sn[-1]['people'][str(pid)]['job'] or 'no job'})" for pid, _ in act.most_common(12)), ""] + (["CONTINUITY NOTES (from the town's own record; follow them):"] + [f"- {x}" for x in cut_notes] + [""] if cut_notes else []) + ["EVENTS:"]
+                 f"The {"quarter" if part else "year"} held {len(dl)} conversations; the {len(dl_pick)} strongest are below, with their original numbers.",
+                 "RESIDENTS WHO WERE IN THE MOST SCENES (candidates, not a ranking): " + "; ".join(f"{names(pid)} ({sn[-1]['people'][str(pid)]['age']}, {sn[-1]['people'][str(pid)]['job'] or 'no job'})" for pid, _ in act.most_common(12)), ""] + (["CONTINUITY NOTES (from the town's own record; follow them):"] + [f"- {x}" for x in cut_notes] + [""] if cut_notes else []) + (prev_lines(prev) if part and prev else []) + ["EVENTS:"]
         for e in ev_pick:
             lines.append(f"[{e['id']}] {e['date']} {e['slot']} ({e['kind']}{', sensitive' if e['sensitive'] else ''}): {e['text']}")
         lines += ["", "DIALOGUES:"]
@@ -269,7 +315,7 @@ def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minu
         def dline(i, cap=None):
             d = dl[i]; L = [f"<{i}> {d['date']} {d['slot']}, {d['medium']}, at {d['place']}: {names(d['a'])} & {names(d['b'])}"]
             return L + [f"   {k}. {sp}: {t}" for k, (sp, t) in enumerate(d["lines"][:cap] if cap else d["lines"])]
-        lines += ["", "LAST DAYS OF THE YEAR (pick the closing scene from these):"]
+        lines += ["", f"LAST DAYS OF THE {'QUARTER' if part else 'YEAR'} (pick the closing scene from these):"]
         for i in tail: lines += dline(i)
         plan_in = {"tail": tail}
         out = None

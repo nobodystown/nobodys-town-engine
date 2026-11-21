@@ -339,7 +339,7 @@ def ledger_card(L, town, episode):
     for _ in range(4000): d.point((r.randrange(OW), r.randrange(OH)), fill=(232, 222, 198))
     d.rectangle([24, 24, OW - 24, OH - 24], outline=INK, width=3); d.rectangle([32, 32, OW - 32, OH - 32], outline=INK, width=1)
     t = f"THE {town.upper()} LEDGER"; f = font(SERIF, 44); d.text(((OW - d.textlength(t, font=f)) / 2, 44), t, font=f, fill=INK)
-    sub = f"END OF EPISODE {episode}  ·  {L['date_end']}"; f2 = font(FB, 18); d.text(((OW - d.textlength(sub, font=f2)) / 2, 100), sub, font=f2, fill=RED)
+    sub = (f"END OF {episode}" if isinstance(episode, str) else f"END OF EPISODE {episode}") + f"  ·  {L['date_end']}"; f2 = font(FB, 18); d.text(((OW - d.textlength(sub, font=f2)) / 2, 100), sub, font=f2, fill=RED)
     d.line([(48, 132), (OW - 48, 132)], fill=INK, width=3)
     G, Rd = (40, 120, 70), (180, 40, 46)
     def ch(v, money=False):
