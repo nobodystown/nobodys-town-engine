@@ -33,19 +33,31 @@ def frame_vertical(scene_img, hook, town, dlg=None, board=None, cap=None):
     return bg
 
 
-def build_short(spec, d, sn, gen, out, fps=24):
+def build_short(spec, d, sn, gen, out, fps=24, durs=None):
+    """durs (optional, Nov 21): real voiced length of each line in seconds; frames are timed to the voices instead of a word count."""
     s = sn[min(d["day"], len(sn) - 1)]; seed = gen["seed"]; frames = []; vlines = []; t = 0.0
     board = overlays.board_state(s)
     place = str(d["place"]); hh = int(place.split("_")[1]) if place.startswith("home_") else s["people"][str(d["a"])]["household"]
     pk = "home" if place.startswith("home") else PLACE_KIND.get(place, "home")
-    for x in spec.get("lines") or [{"n": k, "keep": d["lines"][k][1]} for k in range(min(4, len(d["lines"])))]:
+    for li, x in enumerate(spec.get("lines") or [{"n": k, "keep": d["lines"][k][1]} for k in range(min(4, len(d["lines"])))]):
         k = x["n"]; text = x["keep"]; sp = d["lines"][k][0]
         pid = d["a"] if s["people"][str(d["a"])]["name"] == sp else d["b"]
-        img = scenes.interior(s, seed, pk, hh, [d["a"], d["b"]], None, d["slot"], zoom=pid if len(frames) % 2 else None)
-        dur = max(2.8, len(text.split()) / 2.8 + 1)
+        img = scenes.interior(s, seed, pk, hh, [d["a"], d["b"]], None, d["slot"], zoom=pid if li % 2 else None)
+        dur = (durs[li] + 0.6) if durs else max(2.8, len(text.split()) / 2.8 + 1)
         vlines.append({"start": round(t + 0.2, 2), "role": f"resident:{pid}", "name": s["people"][str(pid)]["name"], "text": text, "max_seconds": round(dur - 0.4, 2)})
-        frames.append((frame_vertical(img, spec["hook"], gen["name"], (s, seed, pid, text, expr_of(text)), board), dur)); t += dur
-        if t > 55: break
+        if durs:  # voiced (Nov 21): page a long line through the card in sentence chunks, each timed by its share of the line's characters
+            import re as _re
+            sents = _re.split(r"(?<=[.!?])\s+", text); chunks, cur = [], ""
+            for x_ in sents:
+                if cur and len(cur) + len(x_) > 100: chunks.append(cur); cur = x_
+                else: cur = (cur + " " + x_).strip()
+            chunks.append(cur)
+            tot = sum(len(c) for c in chunks)
+            for c in chunks: frames.append((frame_vertical(img, spec["hook"], gen["name"], (s, seed, pid, c, expr_of(c)), board), dur * len(c) / tot))
+            t += dur
+        else:
+            frames.append((frame_vertical(img, spec["hook"], gen["name"], (s, seed, pid, text, expr_of(text)), board), dur)); t += dur
+        if t > 55 and not durs: break  # voiced shorts: the clip's own lines decide the length (Shorts run up to 3 minutes)
     json.dump(vlines, open(out.replace(".mp4", "_voices.json"), "w"), indent=1)
     p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{VW}x{VH}", "-r", str(fps), "-i", "-",
                           "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out], stdin=subprocess.PIPE)
