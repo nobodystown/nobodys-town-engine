@@ -47,8 +47,11 @@ def caption_pages(text, max_rows=2):
     return pages
 
 
-def page_times(text, offset):
-    pages = caption_pages(text); total = sum(len(p.split()) for p in pages) or 1; read = words_secs(text) - 0.6
+def page_times(text, offset, real=None):
+    """real: the recorded voice length in seconds when known (Nov 21 fix: with the word estimate, a narrator who read faster than
+    the estimate left the last caption page timed after the shot ended, so it never showed, e.g. Part 2's teaser)."""
+    pages = caption_pages(text); total = sum(len(p.split()) for p in pages) or 1
+    read = (real - 0.3) if real else words_secs(text) - 0.6
     out, acc = [], 0
     for p in pages: out.append((offset + read * acc / total, p)); acc += len(p.split())
     return out
@@ -94,7 +97,7 @@ class Timeline:
             lines.append({"start": round(self.t + narr_offset, 2), "role": "narrator", "text": narration, "max_seconds": round(nd, 2)}); need = narr_offset + nd + 0.3
             self.narr.append({"start": round(self.t + narr_offset, 2), "text": narration})
         dur = max(dur, need)
-        sh = {"kind": kind, "start": self.t, "dur": dur, "narration": narration, "narr_offset": narr_offset, **kw}
+        sh = {"kind": kind, "start": self.t, "dur": dur, "narration": narration, "narr_offset": narr_offset, "narr_secs": nd if narration else None, **kw}
         self.voices += lines; self.shots.append(sh); self.t += dur
         return sh
 
@@ -296,7 +299,7 @@ def base_layer(sh, t_local, seed, gen):
 
 def captions_for(sh):
     if not sh.get("narration") or sh["kind"] in ("title", "ledger"): return []
-    return page_times(sh["narration"], sh.get("narr_offset", 0.3))
+    return page_times(sh["narration"], sh.get("narr_offset", 0.3), sh.get("narr_secs"))
 
 
 def plan_boards(T):
@@ -365,7 +368,7 @@ def srt(T, path):
     cues = []
     for v in T.voices:
         if v["role"] == "narrator":
-            pages = page_times(v["text"], v["start"])
+            pages = page_times(v["text"], v["start"], v["max_seconds"])
             for j, (st, txt) in enumerate(pages): cues.append((st, pages[j + 1][0] if j + 1 < len(pages) else v["start"] + v["max_seconds"], txt))
         else:
             txt = f"{v['name'].split()[0]}: {v['text']}" if v["role"].startswith("resident:") else v["text"]

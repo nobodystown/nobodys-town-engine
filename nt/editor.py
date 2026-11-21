@@ -210,7 +210,9 @@ def ledger(ev, sn, gen, notes=()):
 # WORLD-written record that names a resident next to a choice/guilt word never airs; it stays in the town's log. Residents' own
 # words and their own refereed actions are untouched.
 EDIT_GUILT = re.compile(r"\b(drinks?|drinking|drank|drunk|lies|lied|lying|tells? \w+ it went|hides?|hid|hidden|secret\w*|burn(ed|t|s)? (the |a )?\w*\s?letter|"
-                        r"takes? (another |the )?\$\s?\d+|took (another |the )?\$\s?\d+|from the (till|drawer|tin|register)|covered it|skimm\w*|pinch\w*|embezzl\w*|alter(ed|ation|ing)|forg(ed|ery)|tamper\w*|falsif\w*|doctored|cooked the books|fraud\w*)\b", re.I)
+                        r"takes? (another |the )?\$\s?\d+|took (another |the )?\$\s?\d+|from the (till|drawer|tin|register)|covered it|skimm\w*|pinch\w*|embezzl\w*|alter(ed|ation|ing)|forg(ed|ery)|tamper\w*|falsif\w*|doctored|cooked the books|fraud\w*|"
+                        # Nov 21 (Part 3): "the thief is Cal Dempsey" (world-written, 1950-07-18) slipped through; theft words count too
+                        r"thief|thieves|stolen|robbed|robbing|robs|burglar\w*|took (his|her|their) (savings|money|cash)|keeps? for (himself|herself)|suspects? [^.;]{0,40}\btook)\b", re.I)
 
 
 def world_authored_guilt(ev, sn):

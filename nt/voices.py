@@ -67,7 +67,14 @@ REGION_ACCENT = {"the Great Plains": "light Plains/Midwest", "the High Plains": 
 def speakable(text):
     """Small fixes so a voice reads the real event text naturally. Facts are unchanged."""
     t = re.sub(r"\s\((\d+)\)", r", \1,", text or "")
+    for a, b in SPOKEN_NAMES: t = re.sub(a, b, t)
     return t.strip()
+
+
+# Editor note (Aaron, Nov 20): first names for Wade Pruett, Harold Pruitt and Roy Pruitt, whose surnames sound the same aloud.
+# Household notices ("The Pruetts have lost their home") are read as the head of household's first name. Facts are unchanged.
+SPOKEN_NAMES = [(r"\b[Tt]he Pruett household\b", "Wade's household"), (r"\b[Tt]he Pruetts have\b", "Wade's family has"), (r"\b[Tt]he Pruetts\b", "Wade's family"),
+                (r"\bWade Pruett\b", "Wade"), (r"\bHarold Pruitt\b", "Harold"), (r"\bRoy Pruitt\b", "Roy")]
 
 
 def gazette_read(town, e, headline):
