@@ -204,6 +204,32 @@ def ledger(ev, sn, gen, notes=()):
             "news": [e["data"].get("headline") for e in ev if e["kind"] == "history"][:2], "notes": list(notes)}
 
 
+
+# Aaron, Nov 20-21: innocent people must not be shown doing what only the world step wrote about them. In 1950 the world step
+# authored residents' confessions, thefts, lies, secrets and drinking (fixed in the rules for 1951 on by fix 4). For the edit, a
+# WORLD-written record that names a resident next to a choice/guilt word never airs; it stays in the town's log. Residents' own
+# words and their own refereed actions are untouched.
+EDIT_GUILT = re.compile(r"\b(drinks?|drinking|drank|drunk|lies|lied|lying|tells? \w+ it went|hides?|hid|hidden|secret\w*|burn(ed|t|s)? (the |a )?\w*\s?letter|"
+                        r"takes? (another |the )?\$\s?\d+|took (another |the )?\$\s?\d+|from the (till|drawer|tin|register)|covered it|skimm\w*|pinch\w*|embezzl\w*)\b", re.I)
+
+
+def world_authored_guilt(ev, sn):
+    from .fate import CHOICE, CULPRIT
+    ppl = {}
+    for snap in sn[:: max(1, len(sn) // 24)] + [sn[-1]]:
+        for p in snap["people"].values(): ppl[p["name"]] = 1
+    firsts = {}
+    for n in ppl: firsts.setdefault(n.split()[0], []).append(n)
+    names = list(ppl) + [f for f, v in firsts.items() if len(v) == 1 and len(f) > 2]
+    rx = re.compile(r"\b(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")\b")
+    out = set()
+    for e in ev:
+        if e["kind"] != "world": continue
+        for snt in re.split(r"(?<=[.!?;])\s+", e["text"]):
+            if rx.search(snt) and (CHOICE.search(snt) or CULPRIT.search(snt) or EDIT_GUILT.search(snt)): out.add(e["id"]); break
+    return out
+
+
 def last_days(dl, n_days=7, k=10):
     if not dl: return []
     end = dl[-1]["day"]
@@ -214,6 +240,8 @@ def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minu
     ev, dl, sn = load_run(run_dir)
     cut, cut_notes = load_cuts(run_dir)
     ev = [e for e in ev if e["id"] not in cut]  # continuity cuts never air, as scenes or as news overlays
+    authored = world_authored_guilt(ev, sn); ev = [e for e in ev if e["id"] not in authored]
+    json.dump(sorted(authored), open(os.path.join(run_dir, "not_aired_world_authored.json"), "w"))
     names = lambda pid: next((s["people"][str(pid)]["name"] for s in reversed(sn) if str(pid) in s["people"]), "?")
     hh_name = lambda hid: sn[-1]["households"][str(hid)]["surname"] if str(hid) in sn[-1]["households"] else "?"
     ts = thread_scores(ev, dl, sn)
@@ -246,7 +274,7 @@ def build_episode(run_dir, gen, mode="mock", llm=None, episode_no=1, target_minu
         plan_in = {"tail": tail}
         out = None
         for attempt in range(2):  # one retry if the reply didn't come back as clean JSON
-            out, raw = llm.call_json("editor", [rules], [{"role": "user", "content": "\n".join(lines)}], max_tokens=24000)
+            out, raw = llm.call_json("editor", [rules], [{"role": "user", "content": "\n".join(lines)}], max_tokens=48000)  # Nov 21: thinking used all of 24k once the closing scene was added
             if out and out.get("scenes"): break
         plan = out or {}
     else:
