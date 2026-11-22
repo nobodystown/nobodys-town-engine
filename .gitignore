@@ -20,3 +20,7 @@ rehearsal/
 # python
 __pycache__/
 *.pyc
+
+# private: operations notes and unaired episode material stay in the private repo
+HANDOFF.md
+editorial/

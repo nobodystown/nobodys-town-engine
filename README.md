@@ -16,6 +16,8 @@ The town starts on **January 1, 1950**. One episode covers one calendar year, an
 
 The proof (seed, world fingerprint, rules fingerprint) is published at launch in `proof/`.
 
+Episode material (scripts, subtitles, cast lists) and operations notes are kept private until they air.
+
 ## Layout
 
 | Path | What it is |
