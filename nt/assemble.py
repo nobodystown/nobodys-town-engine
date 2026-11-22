@@ -113,6 +113,9 @@ class Timeline:
             self.add("interior", dur * len(pg.split()) / total, None, **kw2)
 
 
+SEASON_WORD = {"autumn": "fall"}  # an American town says Fall (matches the part label "PART 4 · FALL 1950")
+
+
 def build_timeline(plan, sn, gen, short=False, vo=None):
     """short=True: a pilot or trailer cut with no closing tail (time-lapse, Ledger, Family Board, end screen).
     vo: real recorded line lengths by role (see nt.mix); the picture is then timed to the voices."""
@@ -172,7 +175,9 @@ def build_timeline(plan, sn, gen, short=False, vo=None):
             T.add("pan", 3.0, co["hook"], snap=s0, board=None, news=None, hids=list(dict.fromkeys(hh0)) + [h for h in all_h(s0) if h not in hh0], tod=cd["slot"], weather=s0["weather"].get("sky", "clear"), season=s0["season"], walkers=[])
     pop = plan["ledger"]["population"]; year = sn[0]["date"][:4]
     premise = f"{pop} people. {year}. Every one of them is an AI. Nobody is steering."
-    T.add("title", 5.0, premise, town=gen["name"], episode=plan["episode"], title=plan.get("title", ""), pop=pop, premise=premise)
+    # Nov 21: the editor reused "40 AIs" from Part 1's title on later parts; the card shows the real head count right under it
+    card_title = re.sub(r"^\d+ AIs\b", f"{pop} AIs", plan.get("title", ""))
+    T.add("title", 5.0, premise, town=gen["name"], episode=plan["episode"], title=card_title, pop=pop, premise=premise)
     # ---- welcome (Episode 1) or previously (later): a slow look at the town, then meet the lead(s)
     s0 = sn[0]
     if plan.get("welcome"):
@@ -265,7 +270,7 @@ def render_scene(sh, t_local, seed, gen):
         snaps = sh["snaps"]; i = min(len(snaps) - 1, int(t_local / sh["dur"] * len(snaps))); sp = snaps[i]
         img = _cached(sh, f"tl{i}", lambda: scenes.overview(sp, seed, gen, "midday", sp["season"], "snow" if sp["season"] == "winter" else "clear", 0)).copy()
         import datetime as _dt
-        return scenes.season_stamp(img, f"{sp['season'].upper()} {sp['date'][:4]}")
+        return scenes.season_stamp(img, f"{SEASON_WORD.get(sp['season'], sp['season']).upper()} {sp['date'][:4]}")
     if k == "family": return scenes.family_board_card(sh["fb"], sh["town"], sh.get("episode"))
     if k == "interior": return scenes.interior(sh["snap"], seed, sh["place"], sh["hid"], sh["speakers"], sh["line"], sh["tod"], sh.get("zoom"), sh.get("thought"), sh.get("intro"))
     if k == "newspaper": return scenes.newspaper(sh["town"], sh["date"], sh["headline"], sh.get("sub", ""))

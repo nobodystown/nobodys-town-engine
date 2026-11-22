@@ -1,3 +1,4 @@
+import re
 """On-screen live data: the compact corner Town Board (+ its news line) and the Shorts strip.
 Every number shown is read straight from the simulation snapshot for the day on screen. Nothing is typed in by hand.
   board_state(snap)                      -> dict of true values for that day
@@ -116,7 +117,8 @@ def board_strip(st, town):
 def news_text(e):
     """First sentence of the real event text, short enough for the board line."""
     t = (e.get("text") or "").strip()
-    first = t.split(". ")[0].rstrip(".")
+    # Nov 21: don't end the sentence at a title ("telephone Dr. Ito" was read as "telephone Dr.")
+    first = re.split(r"(?<!\bDr)(?<!\bMr)(?<!\bMrs)(?<!\bMs)(?<!\bSt)(?<!\bJr)\.\s", t)[0].rstrip(".")
     return first + "."
 
 
